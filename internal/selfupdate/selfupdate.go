@@ -59,14 +59,18 @@ func AssetName() string {
 	return name
 }
 
+// asset is one downloadable release file.
+type asset struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	URL  string `json:"browser_download_url"`
+	Size int64  `json:"size"`
+}
+
 // release is the subset of the GitHub release API we need.
 type release struct {
-	TagName string `json:"tag_name"`
-	Assets  []struct {
-		Name string `json:"name"`
-		URL  string `json:"browser_download_url"`
-		Size int64  `json:"size"`
-	} `json:"assets"`
+	TagName string  `json:"tag_name"`
+	Assets  []asset `json:"assets"`
 }
 
 func client() *http.Client {
@@ -166,24 +170,11 @@ func Update(ctx context.Context, out io.Writer, force bool) error {
 	}
 	fmt.Fprintf(out, "updating %s → %s\n", Version, rel.TagName)
 
-	sumsURL, ok := findAsset(rel, "checksums.txt")
-	if !ok {
-		return errors.New("release has no checksums.txt (unsigned releases are rejected)")
-	}
-	sigURL, ok := findAsset(rel, "checksums.txt.sig")
-	if !ok {
-		return errors.New("release has no checksums.txt.sig (unsigned releases are rejected)")
-	}
-	binURL, ok := findAsset(rel, AssetName())
-	if !ok {
-		return fmt.Errorf("release has no asset %s", AssetName())
-	}
-
-	sums, err := fetch(ctx, assetURL(sumsURL), 1<<20)
+	sums, err := downloadAsset(ctx, rel, "checksums.txt", 1<<20)
 	if err != nil {
 		return fmt.Errorf("download checksums: %w", err)
 	}
-	sig, err := fetch(ctx, assetURL(sigURL), 1<<16)
+	sig, err := downloadAsset(ctx, rel, "checksums.txt.sig", 1<<16)
 	if err != nil {
 		return fmt.Errorf("download signature: %w", err)
 	}
@@ -198,7 +189,7 @@ func Update(ctx context.Context, out io.Writer, force bool) error {
 	if err != nil {
 		return err
 	}
-	bin, err := fetch(ctx, assetURL(binURL), 512<<20)
+	bin, err := downloadAsset(ctx, rel, AssetName(), 512<<20)
 	if err != nil {
 		return fmt.Errorf("download binary: %w", err)
 	}
@@ -246,12 +237,50 @@ func Update(ctx context.Context, out io.Writer, force bool) error {
 	return nil
 }
 
+// downloadAsset fetches one release asset. The browser download URL is tried
+// first; when GitHub's CDN fails (transient 5xx are not unheard of) it falls
+// back to the release-asset API, which serves the same bytes and is covered by
+// the same signed checksum verification.
+func downloadAsset(ctx context.Context, rel *release, name string, limit int64) ([]byte, error) {
+	var found bool
+	var id int64
+	var url string
+	for _, a := range rel.Assets {
+		if a.Name == name {
+			found, id, url = true, a.ID, a.URL
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("release has no asset %s (unsigned releases are rejected)", name)
+	}
+	data, err := fetch(ctx, assetURL(url), limit)
+	if err == nil {
+		return data, nil
+	}
+	if id != 0 {
+		apiURL := fmt.Sprintf("%s/repos/%s/releases/assets/%d",
+			strings.TrimRight(APIBase, "/"), Repo, id)
+		if alt, altErr := fetchAccept(ctx, apiURL, "application/octet-stream", limit); altErr == nil {
+			return alt, nil
+		}
+	}
+	return nil, err
+}
+
 func fetch(ctx context.Context, url string, limit int64) ([]byte, error) {
+	return fetchAccept(ctx, url, "", limit)
+}
+
+func fetchAccept(ctx context.Context, url, accept string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "graphify233/"+Version)
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
 	resp, err := client().Do(req)
 	if err != nil {
 		return nil, err
