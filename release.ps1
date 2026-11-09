@@ -90,7 +90,10 @@ try {
         $gh = Get-Command gh -ErrorAction SilentlyContinue
         if (-not $gh) { throw "gh CLI is required for -Publish" }
         $notes = "graphify233 $Version - single static binary, zero dependencies."
-        & gh release create $Version (Join-Path $OutDir "*") --repo $repo --title "graphify233 $Version" --notes $notes
+        # PowerShell does not expand wildcards for native commands, so pass the
+        # asset paths explicitly (gh release create takes one path per argument).
+        $assets = Get-ChildItem -Path $OutDir -File | ForEach-Object { $_.FullName }
+        & gh release create $Version @assets --repo $repo --title "graphify233 $Version" --notes $notes
         if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
         Write-Host "published $Version"
     }

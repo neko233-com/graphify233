@@ -41,8 +41,27 @@ From source:
 go build -o graphify233 ./cmd/graphify233
 ```
 
-## Quick start
+### Mirrors (restricted networks)
 
+The release lookup and the asset downloads can both go through mirrors. The
+Ed25519 signature is always verified locally, so a mirror cannot inject a
+binary or a forged checksum file.
+
+```powershell
+$env:GRAPHIFY233_API = "https://api.kkgithub.com"   # GitHub API mirror
+$env:GRAPHIFY233_MIRROR = "https://ghfast.top"      # prefixes github.com URLs
+irm https://raw.githubusercontent.com/neko233-com/graphify233/main/install.ps1 | iex
+```
+
+```sh
+GRAPHIFY233_API=https://api.kkgithub.com \
+GRAPHIFY233_MIRROR=https://ghfast.top \
+  curl -fsSL https://raw.githubusercontent.com/neko233-com/graphify233/main/install.sh | bash
+```
+
+`graphify233 self-update` honors the same two variables.
+
+## Quick start
 ```sh
 graphify233 build .              # build graphify-out/ for the current project
 graphify233 query "how does auth work"

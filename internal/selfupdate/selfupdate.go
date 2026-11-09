@@ -42,6 +42,14 @@ var APIBase = "https://api.github.com"
 // URLs, e.g. "https://ghfast.top/" + "https://github.com/...".
 var Mirror = os.Getenv("GRAPHIFY233_MIRROR")
 
+func init() {
+	// Allow pointing the release metadata lookup at an API mirror
+	// (e.g. https://api.kkgithub.com) without rebuilding the binary.
+	if v := strings.TrimSpace(os.Getenv("GRAPHIFY233_API")); v != "" {
+		APIBase = v
+	}
+}
+
 // AssetName returns the release asset name for the current platform.
 func AssetName() string {
 	name := fmt.Sprintf("graphify233_%s_%s", runtime.GOOS, runtime.GOARCH)
