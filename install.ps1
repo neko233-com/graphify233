@@ -84,12 +84,19 @@ try {
     # 2) Ed25519 signature over checksums.txt.
     $verified = $false
     if (Test-Path $sigPath) {
-        $existing = Get-Command graphify233 -ErrorAction SilentlyContinue
-        if ($existing) {
-            & $existing.Source verify-release --in $sumsPath --sig $sigPath --pub $PubKey *> $null
+        $localVerifier = Join-Path $BinDir "graphify233.exe"
+        if (Test-Path $localVerifier) {
+            & $localVerifier verify-release --in $sumsPath --sig $sigPath --pub $PubKey *> $null
             $verified = ($LASTEXITCODE -eq 0)
         }
-        elseif (Test-Path (Join-Path (Get-Location) "cmd\gf-release")) {
+        if (-not $verified) {
+            $existing = Get-Command graphify233 -ErrorAction SilentlyContinue
+            if ($existing) {
+                & $existing.Source verify-release --in $sumsPath --sig $sigPath --pub $PubKey *> $null
+                $verified = ($LASTEXITCODE -eq 0)
+            }
+        }
+        if (-not $verified -and (Test-Path (Join-Path (Get-Location) "cmd\gf-release"))) {
             $goCmd = Get-Command go -ErrorAction SilentlyContinue
             if ($goCmd) {
                 & $goCmd.Source run ./cmd/gf-release verify -in $sumsPath -sig $sigPath -pub $PubKey *> $null

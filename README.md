@@ -61,6 +61,10 @@ GRAPHIFY233_MIRROR=https://ghfast.top \
 
 `graphify233 self-update` honors the same two variables.
 
+Release assets normally come from `github.com/.../releases/download/...`. If that
+CDN answers with a transient error, the updater retries the same bytes through the
+GitHub release-asset API; the signature and SHA-256 checks are unchanged.
+
 ## Quick start
 ```sh
 graphify233 build .              # build graphify-out/ for the current project
@@ -176,6 +180,9 @@ the whole pipeline still finishes in under half a second.
 - `self-update` refuses to run unless the release's Ed25519 signature over
   `checksums.txt` verifies **before** any hash is trusted, then verifies the
   binary's SHA-256 and installs atomically next to the running executable.
+- Asset downloads fall back from the release CDN to the release-asset API when
+  the former fails; both routes are covered by the same signature + checksum
+  verification.
 - `GRAPHIFY233_MIRROR` prefixes asset URLs only; signatures are still verified
   locally, so a malicious mirror cannot inject a binary.
 - Sensitive files (`.env`, private keys, credential files) are skipped and
@@ -187,8 +194,8 @@ the whole pipeline still finishes in under half a second.
 ```sh
 go test ./...                 # golden-parity extraction tests + unit tests
 go vet ./...                  # static checks
-./release.ps1 -Version v0.2.0 # or ./release.sh v0.2.0
-./release.ps1 -Publish -Version v0.2.0   # gh release create
+./release.ps1 -Version v0.2.2 # or ./release.sh v0.2.2
+./release.ps1 -Publish -Version v0.2.2   # gh release create
 ```
 
 Tests cover extraction parity, clustering (including the multi-level modularity

@@ -113,11 +113,16 @@ echo "sha256 ok: $got"
 # 2) Ed25519 signature over checksums.txt.
 verified=0
 if [ -f "$tmp/checksums.txt.sig" ]; then
-  if command -v graphify233 >/dev/null 2>&1; then
+  if [ -x "$INSTALL_DIR/graphify233" ]; then
+    if "$INSTALL_DIR/graphify233" verify-release --in "$tmp/checksums.txt" --sig "$tmp/checksums.txt.sig" --pub "$PUBKEY" >/dev/null 2>&1; then verified=1; fi
+  fi
+  if [ "$verified" -eq 0 ] && command -v graphify233 >/dev/null 2>&1; then
     if graphify233 verify-release --in "$tmp/checksums.txt" --sig "$tmp/checksums.txt.sig" --pub "$PUBKEY" >/dev/null 2>&1; then verified=1; fi
-  elif command -v gf-release >/dev/null 2>&1; then
+  fi
+  if [ "$verified" -eq 0 ] && command -v gf-release >/dev/null 2>&1; then
     if gf-release verify -in "$tmp/checksums.txt" -sig "$tmp/checksums.txt.sig" -pub "$PUBKEY" >/dev/null 2>&1; then verified=1; fi
-  elif command -v go >/dev/null 2>&1 && [ -d ./cmd/gf-release ]; then
+  fi
+  if [ "$verified" -eq 0 ] && command -v go >/dev/null 2>&1 && [ -d ./cmd/gf-release ]; then
     if go run ./cmd/gf-release verify -in "$tmp/checksums.txt" -sig "$tmp/checksums.txt.sig" -pub "$PUBKEY" >/dev/null 2>&1; then verified=1; fi
   fi
 fi
