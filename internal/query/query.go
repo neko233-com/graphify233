@@ -243,6 +243,20 @@ func (e *Engine) docMentions(q string, limit int) []int32 {
 // Query runs a natural-language-ish lookup and returns a textual subgraph plus
 // the matched node IDs.
 func (e *Engine) Query(q string, depth, tokenBudget int) (string, []string) {
+	idx := e.pickSeeds(q)
+	if len(idx) == 0 {
+		return "No matching nodes found.", nil
+	}
+	ids := make([]string, len(idx))
+	for i, i2 := range idx {
+		ids[i] = e.G.Nodes[i2].ID
+	}
+	return e.SubgraphText(idx, depth, tokenBudget), ids
+}
+
+// pickSeeds ranks candidate starting nodes for a question: named symbols first,
+// then document concepts, then code symbols mentioned by matching documents.
+func (e *Engine) pickSeeds(q string) []int32 {
 	scored := e.Score(q)
 	// Prefer symbols; document headings and documentation file nodes only
 	// provide a starting point when the question is about a topic rather than a
@@ -280,14 +294,89 @@ func (e *Engine) Query(q string, depth, tokenBudget int) (string, []string) {
 	if len(idx) == 0 {
 		idx = e.docMentions(q, 3)
 	}
+	return idx
+}
+
+// JSONNode is a machine-readable node in a query result.
+type JSONNode struct {
+	ID             string `json:"id"`
+	Label          string `json:"label"`
+	FileType       string `json:"file_type,omitempty"`
+	SourceFile     string `json:"source_file,omitempty"`
+	SourceLocation string `json:"source_location,omitempty"`
+	Community      int    `json:"community"`
+	Degree         int    `json:"degree"`
+}
+
+// JSONEdge is a machine-readable edge in a query result.
+type JSONEdge struct {
+	Source          string  `json:"source"`
+	Target          string  `json:"target"`
+	Relation        string  `json:"relation"`
+	Confidence      string  `json:"confidence,omitempty"`
+	SourceFile      string  `json:"source_file,omitempty"`
+	SourceLocation  string  `json:"source_location,omitempty"`
+	Weight          float64 `json:"weight,omitempty"`
+	ConfidenceScore float64 `json:"confidence_score,omitempty"`
+}
+
+// JSONResult is the structured form of a query, intended for agents and scripts.
+type JSONResult struct {
+	Question string     `json:"question"`
+	Seeds    []string   `json:"seeds"`
+	Nodes    []JSONNode `json:"nodes"`
+	Edges    []JSONEdge `json:"edges"`
+	Tokens   int        `json:"tokens"`
+	Text     string     `json:"text"`
+}
+
+// QueryJSON runs the same lookup as Query but returns structured data. Tokens is
+// a character/4 estimate of Text.
+func (e *Engine) QueryJSON(q string, depth, tokenBudget int) JSONResult {
+	res := JSONResult{
+		Question: q,
+		Seeds:    []string{},
+		Nodes:    []JSONNode{},
+		Edges:    []JSONEdge{},
+	}
+	idx := e.pickSeeds(q)
 	if len(idx) == 0 {
-		return "No matching nodes found.", nil
+		res.Text = "No matching nodes found."
+		return res
 	}
-	ids := make([]string, len(idx))
+	res.Seeds = make([]string, len(idx))
 	for i, i2 := range idx {
-		ids[i] = e.G.Nodes[i2].ID
+		res.Seeds[i] = e.G.Nodes[i2].ID
 	}
-	return e.SubgraphText(idx, depth, tokenBudget), ids
+	nodes, edges := e.BFS(idx, depth)
+	for _, ni := range nodes {
+		n := e.G.Nodes[ni]
+		res.Nodes = append(res.Nodes, JSONNode{
+			ID:             n.ID,
+			Label:          n.Label,
+			FileType:       n.FileType,
+			SourceFile:     n.SourceFile,
+			SourceLocation: n.SourceLocation,
+			Community:      n.Community,
+			Degree:         e.G.Degree(ni),
+		})
+	}
+	for _, ei := range edges {
+		edge := e.G.Edges[ei]
+		res.Edges = append(res.Edges, JSONEdge{
+			Source:          edge.Source,
+			Target:          edge.Target,
+			Relation:        edge.Relation,
+			Confidence:      edge.Confidence,
+			SourceFile:      edge.SourceFile,
+			SourceLocation:  edge.SourceLocation,
+			Weight:          edge.Weight,
+			ConfidenceScore: edge.ConfidenceScore,
+		})
+	}
+	res.Text = e.SubgraphText(idx, depth, tokenBudget)
+	res.Tokens = len(res.Text) / 4
+	return res
 }
 
 // Resolve finds a node by exact ID, exact label (case-insensitive) or

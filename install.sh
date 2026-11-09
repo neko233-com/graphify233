@@ -60,26 +60,40 @@ if [ -n "$LOCAL_DIST" ]; then
 else
   url="$API/repos/$REPO/releases/latest"
   [ "$VERSION" != "latest" ] && url="$API/repos/$REPO/releases/tags/$VERSION"
-  echo "resolving release: $url"
-  json="$(curl -fsSL -H 'User-Agent: graphify233-installer' -H 'Accept: application/vnd.github+json' "$url")"
+
+  # Download routes: direct first, then an explicit mirror or the built-in
+  # China-friendly list. The fastest reachable route wins; the Ed25519
+  # signature is still verified locally, so a mirror cannot inject code.
+  routes=$'\n'
+  if [ -n "$MIRROR" ]; then
+    routes+="${MIRROR%/}/"$'\n'
+  elif [ -z "${GRAPHIFY233_NO_MIRROR:-}" ]; then
+    routes+="https://gh-proxy.com/"$'\n'
+    routes+="https://ghfast.top/"$'\n'
+    routes+="https://ghproxy.net/"$'\n'
+    routes+="https://hub.gitmirror.com/"$'\n'
+    routes+="https://github.moeyy.xyz/"$'\n'
+  fi
+
+  json=""
+  rel_source=""
+  while IFS= read -r prefix; do
+    if json="$(curl -fsSL --max-time 8 -H 'User-Agent: graphify233-installer' -H 'Accept: application/vnd.github+json' "${prefix}${url}" 2>/dev/null)"; then
+      rel_source="${prefix:-direct}"
+      break
+    fi
+  done <<< "$routes"
+  [ -n "$json" ] || { echo "could not resolve the release from GitHub or any mirror; set GRAPHIFY233_MIRROR to a prefix proxy" >&2; exit 1; }
   tag="$(printf '%s' "$json" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
   [ -n "$tag" ] || { echo "could not resolve release tag" >&2; exit 1; }
-  echo "release: $tag"
-  asset_url="$(
-    printf '%s\n' "$json" |
-      awk -v want="\"$asset\"" '
-        index($0, want) { found=1; next }
-        found && /browser_download_url/ {
-          line=$0; sub(/^[^:]*:[[:space:]]*"/, "", line); sub(/".*$/, "", line); print line; exit
-        }'
-  )"
+  echo "release: $tag (via $rel_source)"
+
+  asset_url="$(printf '%s\n' "$json" | awk -v want="\"$asset\"" '
+      index($0, want) { found=1; next }
+      found && /browser_download_url/ {
+        line=$0; sub(/^[^:]*:[[:space:]]*"/, "", line); sub(/".*$/, "", line); print line; exit
+      }')"
   [ -n "$asset_url" ] || { echo "release $tag has no asset $asset" >&2; exit 1; }
-  if [ -n "$MIRROR" ]; then
-    asset_url="${MIRROR%/}/$asset_url"
-    checksums_url="${MIRROR%/}/$API/repos/$REPO/releases/tags/$tag"
-  fi
-  download "$asset_url" "$tmp/$asset"
-  # checksums and signature always come from the same release; mirror them too.
   sums_url="$(printf '%s\n' "$json" | awk -v want='"checksums.txt"' '
       index($0, want) { found=1; next }
       found && /browser_download_url/ { line=$0; sub(/^[^:]*:[[:space:]]*"/, "", line); sub(/".*$/, "", line); print line; exit }')"
@@ -88,12 +102,35 @@ else
       found && /browser_download_url/ { line=$0; sub(/^[^:]*:[[:space:]]*"/, "", line); sub(/".*$/, "", line); print line; exit }')"
   [ -n "$sums_url" ] || { echo "release has no checksums.txt" >&2; exit 1; }
   [ -n "$sig_url" ] || { echo "release has no checksums.txt.sig" >&2; exit 1; }
-  if [ -n "$MIRROR" ]; then
-    sums_url="${MIRROR%/}/$sums_url"
-    sig_url="${MIRROR%/}/$sig_url"
-  fi
-  download "$sums_url" "$tmp/checksums.txt"
-  download "$sig_url" "$tmp/checksums.txt.sig"
+
+  # Rank routes by timing checksums.txt (a few KB) and keep the winning bytes.
+  ranked="$tmp/ranked.tsv"
+  : > "$ranked"
+  while IFS= read -r prefix; do
+    name="${prefix:-direct}"
+    probe="$tmp/probe-$(printf '%s' "$name" | tr -c 'a-z0-9' '_').txt"
+    t="$(curl -fsSL --max-time 8 -o "$probe" -w '%{time_total}' "${prefix}${sums_url}" 2>/dev/null)" || continue
+    ms="$(awk -v t="$t" 'BEGIN { printf "%d", t * 1000 }')"
+    printf '%s\t%s\t%s\t%s\n' "$ms" "$name" "$prefix" "$probe" >> "$ranked"
+  done <<< "$routes"
+  [ -s "$ranked" ] || { echo "could not download checksums.txt from GitHub or any mirror" >&2; exit 1; }
+  sort -n "$ranked" -o "$ranked"
+  IFS=$'\t' read -r best_ms best_name best_prefix best_file < "$ranked"
+  cp "$best_file" "$tmp/checksums.txt"
+  echo "download source: $best_name (${best_ms} ms)"
+
+  fetch_asset() {
+    src="$1"
+    dest="$2"
+    while IFS=$'\t' read -r _ms _name prefix _file; do
+      if curl -fsSL --max-time 300 -o "$dest" "${prefix}${src}"; then
+        return 0
+      fi
+    done < "$ranked"
+    return 1
+  }
+  fetch_asset "$sig_url" "$tmp/checksums.txt.sig" || { echo "could not download checksums.txt.sig" >&2; exit 1; }
+  fetch_asset "$asset_url" "$tmp/$asset" || { echo "could not download $asset" >&2; exit 1; }
 fi
 
 # 1) SHA-256 of the binary.

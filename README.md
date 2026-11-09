@@ -43,23 +43,27 @@ go build -o graphify233 ./cmd/graphify233
 
 ### Mirrors (restricted networks)
 
-The release lookup and the asset downloads can both go through mirrors. The
-Ed25519 signature is always verified locally, so a mirror cannot inject a
-binary or a forged checksum file.
+`install.ps1`, `install.sh` and `graphify233 self-update` try GitHub directly
+and through a built-in list of prefix mirrors (`gh-proxy.com`, `ghfast.top`,
+`ghproxy.net`, `hub.gitmirror.com`, `github.moeyy.xyz`). They probe the routes,
+pick the fastest reachable one for the release lookup and the asset downloads,
+and fall back down the ranking when one route fails. The Ed25519 signature is
+always verified locally, so a mirror cannot inject a binary or a forged
+checksum file.
 
 ```powershell
-$env:GRAPHIFY233_API = "https://api.kkgithub.com"   # GitHub API mirror
-$env:GRAPHIFY233_MIRROR = "https://ghfast.top"      # prefixes github.com URLs
-irm https://raw.githubusercontent.com/neko233-com/graphify233/main/install.ps1 | iex
+$env:GRAPHIFY233_MIRROR = "https://ghfast.top"   # pin one mirror (prefix style)
+$env:GRAPHIFY233_NO_MIRROR = "1"                 # disable automatic mirrors
+$env:GRAPHIFY233_API = "https://api.kkgithub.com" # override the release API base
 ```
 
 ```sh
-GRAPHIFY233_API=https://api.kkgithub.com \
 GRAPHIFY233_MIRROR=https://ghfast.top \
   curl -fsSL https://raw.githubusercontent.com/neko233-com/graphify233/main/install.sh | bash
 ```
 
-`graphify233 self-update` honors the same two variables.
+`GRAPHIFY233_MIRROR` disables the built-in list so the pinned mirror is tried
+first. `GRAPHIFY233_NO_MIRROR` keeps direct GitHub access only.
 
 Release assets normally come from `github.com/.../releases/download/...`. If that
 CDN answers with a transient error, the updater retries the same bytes through the
@@ -93,8 +97,10 @@ graphify233 build [dir] [flags]     build or update the graph
 graphify233 update [dir]            incremental rebuild (changed files only)
 graphify233 scan [dir]              corpus stats without building
 graphify233 query "question"        ranked subgraph as text
+graphify233 query "..." --json      machine-readable subgraph (nodes, edges, tokens)
 graphify233 explain NAME            symbol detail
 graphify233 path FROM TO            shortest path
+graphify233 diff OLD.json NEW.json  added/removed nodes and edges between snapshots
 graphify233 benchmark [dir]         token reduction report
 graphify233 mcp [dir]               MCP server over stdio
 graphify233 watch [dir]             rebuild on file changes

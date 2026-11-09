@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/neko233-com/graphify233/internal/analyze"
 	"github.com/neko233-com/graphify233/internal/benchmark"
 	"github.com/neko233-com/graphify233/internal/cache"
 	"github.com/neko233-com/graphify233/internal/detect"
@@ -67,6 +68,8 @@ func run(args []string) error {
 		return mcpCmd(rest)
 	case "benchmark", "bench":
 		return benchCmd(rest)
+	case "diff":
+		return diffCmd(rest)
 	case "hook":
 		return hookCmd(rest)
 	case "install":
@@ -99,9 +102,10 @@ Usage:
   graphify233 [dir] [build flags]        build the graph for dir (default: .)
   graphify233 update [dir]               incremental rebuild
   graphify233 scan [dir]                 detect files and corpus size
-  graphify233 query "question" [--depth 3] [--budget 2000] [--graph path]
+  graphify233 query "question" [--depth 3] [--budget 2000] [--json] [--graph path]
   graphify233 path FROM TO [--graph path]
   graphify233 explain NAME [--graph path]
+  graphify233 diff OLD.json NEW.json [--json]  compare two graph snapshots
   graphify233 mcp [--graph path]         MCP server over stdio
   graphify233 benchmark [graph.json]     token-reduction estimate
   graphify233 watch [dir]                rebuild on file changes
@@ -187,6 +191,40 @@ func graphPath(root, flagPath string) string {
 		return filepath.Join(root, "graphify-out", "graph.json")
 	}
 	return ""
+}
+
+// reorderFlags moves flag tokens (and the values of the named value-taking
+// flags) ahead of positional arguments, so `query "q" --json` and
+// `diff old new --json` work like users expect. Go's flag package stops at the
+// first positional.
+func reorderFlags(args []string, valueFlags ...string) []string {
+	takesValue := make(map[string]bool, len(valueFlags))
+	for _, f := range valueFlags {
+		takesValue[f] = true
+	}
+	flags := make([]string, 0, len(args))
+	pos := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			pos = append(pos, args[i+1:]...)
+			break
+		}
+		if strings.HasPrefix(a, "-") && a != "-" {
+			flags = append(flags, a)
+			name := a
+			if eq := strings.IndexByte(a, '='); eq >= 0 {
+				name = a[:eq]
+			}
+			if !strings.Contains(a, "=") && takesValue[name] && i+1 < len(args) {
+				i++
+				flags = append(flags, args[i])
+			}
+			continue
+		}
+		pos = append(pos, a)
+	}
+	return append(flags, pos...)
 }
 
 func buildCmd(args []string, forceUpdate bool) error {
@@ -343,7 +381,8 @@ func queryCmd(args []string) error {
 	gp := graphFlag(fs)
 	depth := fs.Int("depth", 3, "BFS depth")
 	budget := fs.Int("budget", 2000, "token budget")
-	if err := fs.Parse(args); err != nil {
+	asJSON := fs.Bool("json", false, "machine-readable subgraph")
+	if err := fs.Parse(reorderFlags(args, "--graph", "-graph", "--depth", "-depth", "--budget", "-budget")); err != nil {
 		return err
 	}
 	q := strings.Join(fs.Args(), " ")
@@ -354,7 +393,13 @@ func queryCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	text, ids := query.New(g).Query(q, *depth, *budget)
+	e := query.New(g)
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(e.QueryJSON(q, *depth, *budget))
+	}
+	text, ids := e.Query(q, *depth, *budget)
 	fmt.Println(text)
 	if len(ids) > 0 {
 		fmt.Fprintf(os.Stderr, "\nmatched: %s\n", strings.Join(ids, ", "))
@@ -362,11 +407,64 @@ func queryCmd(args []string) error {
 	return nil
 }
 
+func diffCmd(args []string) error {
+	fs := flag.NewFlagSet("diff", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable diff")
+	if err := fs.Parse(reorderFlags(args)); err != nil {
+		return err
+	}
+	if fs.NArg() != 2 {
+		return errors.New("usage: graphify233 diff OLD.json NEW.json [--json]")
+	}
+	oldG, err := export.LoadJSON(fs.Arg(0))
+	if err != nil {
+		return fmt.Errorf("old graph: %w", err)
+	}
+	newG, err := export.LoadJSON(fs.Arg(1))
+	if err != nil {
+		return fmt.Errorf("new graph: %w", err)
+	}
+	d := analyze.GraphDiff(oldG, newG)
+	if *asJSON {
+		if err := d.WriteJSON(os.Stdout); err != nil {
+			return err
+		}
+		fmt.Println()
+		return nil
+	}
+	fmt.Println(d.Summary())
+	printDiffNodes("+", d.AddedNodes, 20)
+	printDiffNodes("-", d.RemovedNodes, 20)
+	printDiffEdges("+", d.AddedEdges, 20)
+	printDiffEdges("-", d.RemovedEdges, 20)
+	return nil
+}
+
+func printDiffNodes(marker string, nodes []analyze.DiffNode, limit int) {
+	for i, n := range nodes {
+		if i == limit {
+			fmt.Printf("  %s … and %d more\n", marker, len(nodes)-limit)
+			break
+		}
+		fmt.Printf("  %s node %-40s %s\n", marker, n.Label, n.SourceFile)
+	}
+}
+
+func printDiffEdges(marker string, edges []analyze.DiffEdge, limit int) {
+	for i, e := range edges {
+		if i == limit {
+			fmt.Printf("  %s … and %d more\n", marker, len(edges)-limit)
+			break
+		}
+		fmt.Printf("  %s edge %s --%s--> %s\n", marker, e.Source, e.Relation, e.Target)
+	}
+}
+
 func pathCmd(args []string) error {
 	root, args := splitDir(args)
 	fs := flag.NewFlagSet("path", flag.ContinueOnError)
 	gp := graphFlag(fs)
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderFlags(args, "--graph", "-graph")); err != nil {
 		return err
 	}
 	if fs.NArg() < 2 {
@@ -388,7 +486,7 @@ func explainCmd(args []string) error {
 	root, args := splitDir(args)
 	fs := flag.NewFlagSet("explain", flag.ContinueOnError)
 	gp := graphFlag(fs)
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderFlags(args, "--graph", "-graph")); err != nil {
 		return err
 	}
 	if fs.NArg() < 1 {
@@ -410,7 +508,7 @@ func mcpCmd(args []string) error {
 	root, args := splitDir(args)
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	gp := graphFlag(fs)
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderFlags(args, "--graph", "-graph")); err != nil {
 		return err
 	}
 	g, err := loadGraph(graphPath(root, *gp))

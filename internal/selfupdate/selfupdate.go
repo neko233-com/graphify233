@@ -87,9 +87,26 @@ func assetURL(u string) string {
 	return u
 }
 
-// Latest fetches the latest release metadata.
+// Latest fetches the latest release metadata, racing direct GitHub access and
+// mirror prefixes so a blocked or slow route does not stall updates.
 func Latest(ctx context.Context) (*release, error) {
 	url := fmt.Sprintf("%s/repos/%s/releases/latest", strings.TrimRight(APIBase, "/"), Repo)
+	urls := []string{url}
+	if isGitHubURL(url) {
+		for _, s := range sources() {
+			if s.base != "" {
+				urls = append(urls, s.url(url))
+			}
+		}
+	}
+	if len(urls) == 1 {
+		return fetchRelease(ctx, url)
+	}
+	return firstRelease(ctx, urls)
+}
+
+// fetchRelease decodes one release metadata response.
+func fetchRelease(ctx context.Context, url string) (*release, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -112,6 +129,43 @@ func Latest(ctx context.Context) (*release, error) {
 		return nil, errors.New("release metadata has no tag")
 	}
 	return &r, nil
+}
+
+// firstRelease returns the first successful lookup and cancels the rest. Mirrors
+// that answer 403 for the API simply lose the race.
+func firstRelease(ctx context.Context, urls []string) (*release, error) {
+	type result struct {
+		rel *release
+		err error
+	}
+	ch := make(chan result, len(urls))
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	for _, u := range urls {
+		go func(u string) {
+			reqCtx, c := context.WithTimeout(cctx, 15*time.Second)
+			defer c()
+			r, err := fetchRelease(reqCtx, u)
+			ch <- result{r, err}
+		}(u)
+	}
+	var lastErr error
+	for range urls {
+		select {
+		case res := <-ch:
+			if res.err == nil {
+				cancel()
+				return res.rel, nil
+			}
+			lastErr = res.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("release lookup failed")
+	}
+	return nil, lastErr
 }
 
 // Check returns the latest published tag.
@@ -170,11 +224,21 @@ func Update(ctx context.Context, out io.Writer, force bool) error {
 	}
 	fmt.Fprintf(out, "updating %s → %s\n", Version, rel.TagName)
 
-	sums, err := downloadAsset(ctx, rel, "checksums.txt", 1<<20)
+	// Rank download routes once (direct + any mirrors) by probing the small
+	// checksums asset, then reuse the fastest route for every asset.
+	var srcs []source
+	if sumURL, ok := findAsset(rel, "checksums.txt"); ok {
+		srcs = rankSources(ctx, applicable(sumURL), sumURL)
+		if len(srcs) > 0 {
+			fmt.Fprintf(out, "download source: %s\n", srcs[0].name)
+		}
+	}
+
+	sums, _, err := downloadRanked(ctx, rel, "checksums.txt", 1<<20, srcs)
 	if err != nil {
 		return fmt.Errorf("download checksums: %w", err)
 	}
-	sig, err := downloadAsset(ctx, rel, "checksums.txt.sig", 1<<16)
+	sig, _, err := downloadRanked(ctx, rel, "checksums.txt.sig", 1<<16, srcs)
 	if err != nil {
 		return fmt.Errorf("download signature: %w", err)
 	}
@@ -189,7 +253,7 @@ func Update(ctx context.Context, out io.Writer, force bool) error {
 	if err != nil {
 		return err
 	}
-	bin, err := downloadAsset(ctx, rel, AssetName(), 512<<20)
+	bin, _, err := downloadRanked(ctx, rel, AssetName(), 512<<20, srcs)
 	if err != nil {
 		return fmt.Errorf("download binary: %w", err)
 	}
@@ -235,6 +299,40 @@ func Update(ctx context.Context, out io.Writer, force bool) error {
 	_ = os.Remove(oldName)
 	fmt.Fprintf(out, "installed %s at %s\n", rel.TagName, exe)
 	return nil
+}
+
+// downloadRanked fetches one release asset through already-ranked sources,
+// falling back to the release-asset API endpoint when every route fails.
+func downloadRanked(ctx context.Context, rel *release, name string, limit int64, srcs []source) ([]byte, string, error) {
+	var id int64
+	var url string
+	found := false
+	for _, a := range rel.Assets {
+		if a.Name == name {
+			found, id, url = true, a.ID, a.URL
+			break
+		}
+	}
+	if !found {
+		return nil, "", fmt.Errorf("release has no asset %s (unsigned releases are rejected)", name)
+	}
+	if len(srcs) > 0 {
+		if data, src, err := fetchVia(ctx, srcs, url, limit); err == nil {
+			return data, src, nil
+		}
+	}
+	if id != 0 {
+		apiURL := fmt.Sprintf("%s/repos/%s/releases/assets/%d",
+			strings.TrimRight(APIBase, "/"), Repo, id)
+		if alt, err := fetchAccept(ctx, apiURL, "application/octet-stream", limit); err == nil {
+			return alt, "api", nil
+		}
+	}
+	data, err := fetch(ctx, assetURL(url), limit)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, "direct", nil
 }
 
 // downloadAsset fetches one release asset. The browser download URL is tried

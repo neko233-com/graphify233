@@ -96,3 +96,39 @@ func TestQueryFallsBackToDocumentMentions(t *testing.T) {
 		t.Fatalf("unexpected fallback for unknown terms: %q %v", text, ids)
 	}
 }
+
+func TestQueryJSON(t *testing.T) {
+	e := New(chainGraph())
+	res := e.QueryJSON("gamma", 2, 500)
+	if res.Question != "gamma" {
+		t.Fatalf("question = %q", res.Question)
+	}
+	if len(res.Seeds) != 1 || res.Seeds[0] != "c" {
+		t.Fatalf("seeds = %v, want [c]", res.Seeds)
+	}
+	if len(res.Nodes) == 0 || len(res.Edges) == 0 {
+		t.Fatalf("empty result: %+v", res)
+	}
+	if res.Tokens != len(res.Text)/4 {
+		t.Fatalf("tokens = %d, want %d", res.Tokens, len(res.Text)/4)
+	}
+	if !strings.Contains(res.Text, "NODE gamma()") {
+		t.Fatalf("text missing node:\n%s", res.Text)
+	}
+	if res.Nodes[0].ID == "" || res.Edges[0].Relation == "" {
+		t.Fatalf("unfilled node/edge: %+v %+v", res.Nodes[0], res.Edges[0])
+	}
+}
+
+func TestQueryJSONNoMatch(t *testing.T) {
+	res := New(chainGraph()).QueryJSON("zebra", 2, 500)
+	if len(res.Seeds) != 0 || len(res.Nodes) != 0 || len(res.Edges) != 0 {
+		t.Fatalf("expected empty result: %+v", res)
+	}
+	if res.Text != "No matching nodes found." {
+		t.Fatalf("text = %q", res.Text)
+	}
+	if res.Seeds == nil || res.Nodes == nil || res.Edges == nil {
+		t.Fatal("JSON slices must be non-nil so they encode as []")
+	}
+}

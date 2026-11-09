@@ -50,21 +50,92 @@ try {
         } else {
             "$api/repos/$Repo/releases/tags/$Version"
         }
-        Write-Host "resolving release: $url"
-        $rel = Invoke-RestMethod -Uri $url -Headers @{ "User-Agent" = "graphify233-installer"; "Accept" = "application/vnd.github+json" }
-        $tag = $rel.tag_name
-        Write-Host "release: $tag"
 
-        function AssetUrl([string]$name) {
+        # Download routes: direct first, then an explicit mirror or the built-in
+        # China-friendly list. The fastest reachable one wins per install; the
+        # Ed25519 signature still has to verify locally, so a mirror cannot
+        # inject code.
+        $mirrors = @()
+        if ($Mirror) {
+            $mirrors += , @("env", $Mirror.TrimEnd('/') + "/")
+        }
+        elseif (-not $env:GRAPHIFY233_NO_MIRROR) {
+            $mirrors += , @("gh-proxy", "https://gh-proxy.com/")
+            $mirrors += , @("ghfast", "https://ghfast.top/")
+            $mirrors += , @("ghproxy.net", "https://ghproxy.net/")
+            $mirrors += , @("gitmirror", "https://hub.gitmirror.com/")
+            $mirrors += , @("moeyy", "https://github.moeyy.xyz/")
+        }
+
+        Write-Host "resolving release: $url"
+        $rel = $null
+        $relSource = ""
+        foreach ($src in @(, @("direct", "")) + $mirrors) {
+            $prefix = $src[1]
+            $u = if ($prefix) { $prefix + $url } else { $url }
+            try {
+                $rel = Invoke-RestMethod -Uri $u -Headers @{ "User-Agent" = "graphify233-installer"; "Accept" = "application/vnd.github+json" } -TimeoutSec 8
+                $relSource = $src[0]
+                break
+            }
+            catch {
+                # 403/timeouts from mirrors that do not proxy the API are expected.
+            }
+        }
+        if (-not $rel) {
+            throw "could not resolve the release from GitHub or any mirror; set GRAPHIFY233_MIRROR to a prefix proxy"
+        }
+        $tag = $rel.tag_name
+        Write-Host "release: $tag (via $relSource)"
+
+        function AssetUrlOf([string]$name) {
             $a = $rel.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1
             if (-not $a) { throw "release $tag has no asset $name" }
-            $u = $a.browser_download_url
-            if ($Mirror) { return $Mirror.TrimEnd('/') + "/" + $u }
-            return $u
+            return $a.browser_download_url
         }
-        Invoke-WebRequest -Uri (AssetUrl $asset) -OutFile (Join-Path $tmp $asset) -UseBasicParsing
-        Invoke-WebRequest -Uri (AssetUrl "checksums.txt") -OutFile (Join-Path $tmp "checksums.txt") -UseBasicParsing
-        Invoke-WebRequest -Uri (AssetUrl "checksums.txt.sig") -OutFile (Join-Path $tmp "checksums.txt.sig") -UseBasicParsing
+
+        # Rank routes by timing the small checksums.txt download, keeping the
+        # bytes from the winning route instead of fetching twice.
+        $ranked = @()
+        foreach ($src in @(, @("direct", "")) + $mirrors) {
+            $name = $src[0]
+            $prefix = $src[1]
+            $u = if ($prefix) { $prefix + (AssetUrlOf "checksums.txt") } else { AssetUrlOf "checksums.txt" }
+            $file = Join-Path $tmp "checksums-$name.txt"
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            try {
+                Invoke-WebRequest -Uri $u -OutFile $file -UseBasicParsing -TimeoutSec 8
+                $sw.Stop()
+                $ranked += [pscustomobject]@{ Name = $name; Prefix = $prefix; Delay = $sw.ElapsedMilliseconds; File = $file }
+            }
+            catch {
+                $sw.Stop()
+            }
+        }
+        if ($ranked.Count -eq 0) {
+            throw "could not download checksums.txt from GitHub or any mirror"
+        }
+        $ranked = @($ranked | Sort-Object Delay)
+        $best = $ranked[0]
+        Write-Host ("download source: {0} ({1} ms)" -f $best.Name, $best.Delay)
+        Copy-Item -Force $best.File (Join-Path $tmp "checksums.txt")
+
+        function SaveAsset([string]$assetName, [string]$dest) {
+            $u0 = AssetUrlOf $assetName
+            foreach ($r in $ranked) {
+                $u = if ($r.Prefix) { $r.Prefix + $u0 } else { $u0 }
+                try {
+                    Invoke-WebRequest -Uri $u -OutFile $dest -UseBasicParsing -TimeoutSec 120
+                    return
+                }
+                catch {
+                    # try the next fastest route
+                }
+            }
+            throw "could not download $assetName from GitHub or any mirror"
+        }
+        SaveAsset "checksums.txt.sig" (Join-Path $tmp "checksums.txt.sig")
+        SaveAsset $asset (Join-Path $tmp $asset)
     }
 
     $binPath = Join-Path $tmp $asset
