@@ -88,6 +88,55 @@ func edgeRef(e *model.Edge) DiffEdge {
 	return DiffEdge{Source: s, Target: t, Relation: e.Relation, Confidence: e.Confidence}
 }
 
+// matchCommunities maps each old community id to the new community that shares
+// the most surviving nodes with it. Community ids are renumbered between runs
+// (sorted by size), so a raw id comparison would report almost every node as
+// having moved; membership overlap is what "drift" actually means.
+func matchCommunities(oldG, newG *model.Graph) map[int]int {
+	oldByID := make(map[string]*model.Node, len(oldG.Nodes))
+	for _, n := range oldG.Nodes {
+		oldByID[n.ID] = n
+	}
+	type pair struct{ old, new, overlap int }
+	counts := make(map[[2]int]int)
+	for _, n := range newG.Nodes {
+		if n.Community < 0 {
+			continue
+		}
+		oldN, ok := oldByID[n.ID]
+		if !ok || oldN.Community < 0 {
+			continue
+		}
+		counts[[2]int{oldN.Community, n.Community}]++
+	}
+	pairs := make([]pair, 0, len(counts))
+	for k, c := range counts {
+		pairs = append(pairs, pair{old: k[0], new: k[1], overlap: c})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].overlap != pairs[j].overlap {
+			return pairs[i].overlap > pairs[j].overlap
+		}
+		if pairs[i].old != pairs[j].old {
+			return pairs[i].old < pairs[j].old
+		}
+		return pairs[i].new < pairs[j].new
+	})
+	mapping := make(map[int]int, len(pairs))
+	usedNew := make(map[int]bool, len(pairs))
+	for _, p := range pairs {
+		if _, ok := mapping[p.old]; ok {
+			continue
+		}
+		if usedNew[p.new] {
+			continue
+		}
+		mapping[p.old] = p.new
+		usedNew[p.new] = true
+	}
+	return mapping
+}
+
 // GraphDiff compares two graphs by node ID and by (endpoint, endpoint,
 // relation). Attribute-only changes are ignored; the result is deterministic.
 func GraphDiff(oldG, newG *model.Graph) Diff {
@@ -108,17 +157,22 @@ func GraphDiff(oldG, newG *model.Graph) Diff {
 			d.AddedNodes = append(d.AddedNodes, nodeRef(n))
 		}
 	}
+	matched := matchCommunities(oldG, newG)
 	for _, n := range oldG.Nodes {
 		cur, ok := newNodes[n.ID]
 		if !ok {
 			d.RemovedNodes = append(d.RemovedNodes, nodeRef(n))
 			continue
 		}
-		// Community drift: the node survived but the clustering moved it.
-		if n.Community >= 0 && cur.Community >= 0 && n.Community != cur.Community {
-			d.MovedNodes = append(d.MovedNodes, CommunityMove{
-				ID: n.ID, Label: cur.Label, From: n.Community, To: cur.Community,
-			})
+		// Community drift: the node survived but the clustering moved it. The
+		// old community is first mapped to its best-overlap counterpart so
+		// per-run renumbering alone is not reported as a move.
+		if n.Community >= 0 && cur.Community >= 0 {
+			if want, ok := matched[n.Community]; ok && cur.Community != want {
+				d.MovedNodes = append(d.MovedNodes, CommunityMove{
+					ID: n.ID, Label: cur.Label, From: n.Community, To: cur.Community,
+				})
+			}
 		}
 	}
 	sort.Slice(d.MovedNodes, func(i, j int) bool { return d.MovedNodes[i].ID < d.MovedNodes[j].ID })

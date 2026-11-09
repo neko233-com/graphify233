@@ -71,6 +71,43 @@ func TestGraphDiffUndirectedEdgeIdentity(t *testing.T) {
 	}
 }
 
+func TestGraphDiffCommunityRenumberingIsNotDrift(t *testing.T) {
+	oldG := diffGraph(
+		[]model.Node{
+			node("a", "alpha()", "a.py", "L1"), node("b", "beta()", "a.py", "L4"),
+			node("c", "gamma()", "b.py", "L1"),
+		}, nil)
+	oldG.Nodes[0].Community, oldG.Nodes[1].Community, oldG.Nodes[2].Community = 0, 0, 1
+	newG := diffGraph(
+		[]model.Node{
+			node("a", "alpha()", "a.py", "L1"), node("b", "beta()", "a.py", "L4"),
+			node("c", "gamma()", "b.py", "L1"),
+		}, nil)
+	newG.Nodes[0].Community, newG.Nodes[1].Community, newG.Nodes[2].Community = 1, 1, 0
+	if d := GraphDiff(oldG, newG); len(d.MovedNodes) != 0 {
+		t.Fatalf("renumbered communities reported as drift: %+v", d.MovedNodes)
+	}
+}
+
+func TestGraphDiffReportsRealCommunityMove(t *testing.T) {
+	oldG := diffGraph(
+		[]model.Node{
+			node("a", "alpha()", "a.py", "L1"), node("b", "beta()", "a.py", "L4"),
+			node("c", "gamma()", "b.py", "L1"),
+		}, nil)
+	oldG.Nodes[0].Community, oldG.Nodes[1].Community, oldG.Nodes[2].Community = 0, 0, 1
+	newG := diffGraph(
+		[]model.Node{
+			node("a", "alpha()", "a.py", "L1"), node("b", "beta()", "a.py", "L4"),
+			node("c", "gamma()", "b.py", "L1"),
+		}, nil)
+	newG.Nodes[0].Community, newG.Nodes[1].Community, newG.Nodes[2].Community = 0, 1, 1
+	d := GraphDiff(oldG, newG)
+	if len(d.MovedNodes) != 1 || d.MovedNodes[0].ID != "b" {
+		t.Fatalf("moved nodes = %+v", d.MovedNodes)
+	}
+}
+
 func TestGraphDiffDetectsRemovals(t *testing.T) {
 	full := diffGraph(
 		[]model.Node{node("a", "alpha()", "a.py", "L1"), node("b", "beta()", "a.py", "L4")},
