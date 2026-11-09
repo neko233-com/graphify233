@@ -16,3 +16,6 @@ release/keys/*.key
 *.swp
 .DS_Store
 Thumbs.db
+
+# local end-to-end scratch corpora
+.e2e/

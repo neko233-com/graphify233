@@ -68,3 +68,31 @@ func TestPathAndQuery(t *testing.T) {
 		t.Fatalf("query subgraph incomplete:\n%s", text)
 	}
 }
+
+func docGraph() *model.Graph {
+	g := model.New()
+	for _, n := range []model.Node{
+		{ID: "docs_auth_md", Label: "AUTH.md", FileType: model.FileTypeDocument, SourceFile: "docs/AUTH.md", SourceLocation: "L1", Community: 0},
+		{ID: "authenticate", Label: "authenticate()", FileType: model.FileTypeCode, SourceFile: "auth.go", SourceLocation: "L10", Community: 0},
+		{ID: "readme_md", Label: "README.md", FileType: model.FileTypeDocument, SourceFile: "README.md", SourceLocation: "L1", Community: 0},
+	} {
+		g.AddNode(n)
+	}
+	g.AddEdge(model.Edge{Source: "docs_auth_md", Target: "authenticate", Relation: "mentions", Confidence: model.ConfInferred, Weight: 0.6})
+	g.BuildAdjacency()
+	return g
+}
+
+func TestQueryFallsBackToDocumentMentions(t *testing.T) {
+	e := New(docGraph())
+	text, ids := e.Query("how does auth work", 2, 600)
+	if len(ids) != 1 || ids[0] != "authenticate" {
+		t.Fatalf("ids = %v, want [authenticate]", ids)
+	}
+	if !strings.Contains(text, "NODE authenticate()") {
+		t.Fatalf("subgraph missing mentioned symbol:\n%s", text)
+	}
+	if text, ids := e.Query("zzz", 2, 600); len(ids) != 0 || !strings.Contains(text, "No matching") {
+		t.Fatalf("unexpected fallback for unknown terms: %q %v", text, ids)
+	}
+}

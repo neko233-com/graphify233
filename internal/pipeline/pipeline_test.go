@@ -112,3 +112,48 @@ func TestRunRejectsEmptyRoot(t *testing.T) {
 		t.Fatal("expected an error for an empty corpus")
 	}
 }
+
+const deepPython = `def widget_run():
+    return 1
+`
+
+func TestRunDeepLinksDocumentationToCode(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "widget.py"), []byte(deepPython), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "guide.md"), []byte("# Guide\n\nCall widget_run before rendering.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	standard, err := Run(Options{Root: root, Formats: DefaultFormats()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if standard.Mentions != 0 {
+		t.Fatalf("standard mode linked %d mentions, want 0", standard.Mentions)
+	}
+
+	deep, err := Run(Options{Root: root, Formats: DefaultFormats(), Mode: "deep"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deep.Mentions < 1 {
+		t.Fatalf("deep mode linked %d mentions, want >= 1", deep.Mentions)
+	}
+	found := false
+	for _, e := range deep.Graph.Edges {
+		if e.Relation != "mentions" {
+			continue
+		}
+		if tgt := deep.Graph.Nodes[deep.Graph.Index(e.Target)]; tgt.Label == "widget_run()" {
+			found = true
+			if e.SourceLocation != "L3" {
+				t.Fatalf("mention location = %q, want L3", e.SourceLocation)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("guide.md did not mention widget_run()")
+	}
+}

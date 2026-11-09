@@ -28,6 +28,7 @@ type Data struct {
 	Mode         string
 	InputTokens  int
 	OutputTokens int
+	Mentions     int
 }
 
 // Write renders the report to path.
@@ -70,6 +71,9 @@ func Render(d Data) string {
 	}
 	if d.Mode != "" {
 		fmt.Fprintf(&b, "- Mode: %s\n", d.Mode)
+	}
+	if d.Mentions > 0 {
+		fmt.Fprintf(&b, "- Documentation: %d doc→code mentions linked\n", d.Mentions)
 	}
 	b.WriteString("\n")
 

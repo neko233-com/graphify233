@@ -188,6 +188,27 @@ func (g *Graph) EnsureIndex() {
 	g.adjDirty = true
 }
 
+// HasEdge reports whether an undirected edge already connects a and b.
+func (g *Graph) HasEdge(a, b string) bool {
+	g.EnsureIndex()
+	ia, ok := g.index[a]
+	if !ok {
+		return false
+	}
+	ib, ok := g.index[b]
+	if !ok {
+		return false
+	}
+	if ia > ib {
+		ia, ib = ib, ia
+	}
+	if g.edgeIdx == nil {
+		return false
+	}
+	_, ok = g.edgeIdx[edgeKey{ia, ib}]
+	return ok
+}
+
 // AddEdge adds an edge if both endpoints exist, collapsing parallel pairs.
 func (g *Graph) AddEdge(e Edge) bool {
 	g.EnsureIndex()
@@ -406,3 +427,8 @@ func IsFileLabel(label string) bool {
 	}
 	return strings.HasPrefix(label, ".") && strings.HasSuffix(label, "()")
 }
+
+// IsFileExtLabel reports whether the label is a filename with a known code
+// extension ("a.py"). Unlike IsFileLabel it does not treat method labels like
+// ".start()" as files, so symbol matching still sees them.
+func IsFileExtLabel(label string) bool { return codeExtSet[extOf(label)] }

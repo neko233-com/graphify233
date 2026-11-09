@@ -17,6 +17,7 @@ import (
 	"github.com/neko233-com/graphify233/internal/cache"
 	"github.com/neko233-com/graphify233/internal/cluster"
 	"github.com/neko233-com/graphify233/internal/detect"
+	"github.com/neko233-com/graphify233/internal/enrich"
 	"github.com/neko233-com/graphify233/internal/export"
 	"github.com/neko233-com/graphify233/internal/extract"
 	"github.com/neko233-com/graphify233/internal/graphbuild"
@@ -86,6 +87,7 @@ type Result struct {
 	WriteTime    time.Duration
 	Outputs      []string
 	Neo4jSent    int
+	Mentions     int
 	Warnings     []string
 }
 
@@ -203,6 +205,20 @@ func Run(opts Options) (*Result, error) {
 		exs = append(exs, results[i])
 	}
 	g := graphbuild.FromExtractions(exs)
+
+	// Deep mode links documentation to code by matching symbol names. It is
+	// deterministic and local: no LLM, no network.
+	mentions := 0
+	if opts.Mode == "deep" {
+		var docs []enrich.Doc
+		for i := range jobs {
+			switch jobs[i].kind {
+			case string(detect.Document), string(detect.Paper):
+				docs = append(docs, enrich.Doc{Path: jobs[i].path, Rel: jobs[i].rel, Kind: jobs[i].kind})
+			}
+		}
+		mentions = enrich.Mentions(g, docs, enrich.Limits{})
+	}
 	g.BuildAdjacency()
 	logf("Graph: %d nodes, %d edges", len(g.Nodes), len(g.Edges))
 
@@ -231,7 +247,7 @@ func Run(opts Options) (*Result, error) {
 		Gods: gods, Surprises: surprises, Questions: questions, Detection: det,
 		FilesExtract: int(extracted), FilesCached: int(cached), FilesFailed: int(failed),
 		InputTokens: inputTokens, OutputTokens: 0,
-		DetectTime: detectDur, ExtractTime: extractDur, ClusterTime: clusterDur,
+		DetectTime: detectDur, ExtractTime: extractDur, ClusterTime: clusterDur, Mentions: mentions,
 	}
 
 	if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
@@ -249,6 +265,7 @@ func Run(opts Options) (*Result, error) {
 			Root: reportRoot(opts), Graph: g, Communities: comms, Cohesion: cohesion,
 			Labels: labels, GodNodes: gods, Surprises: surprises, Questions: questions,
 			Detection: det, Mode: opts.Mode, InputTokens: inputTokens, OutputTokens: 0,
+			Mentions: mentions,
 		}
 		if err := report.Write(filepath.Join(opts.OutDir, "GRAPH_REPORT.md"), d); err != nil {
 			return nil, err

@@ -4,6 +4,8 @@ package query
 
 import (
 	"fmt"
+	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode"
@@ -161,12 +163,122 @@ func (e *Engine) SubgraphText(start []int32, depth, tokenBudget int) string {
 	return b.String()
 }
 
+// docMentions finds documentation nodes whose label or path matches the query
+// and returns the code symbols they mention. It is the fallback for questions
+// that do not name a symbol directly ("how does authentication work").
+func (e *Engine) docMentions(q string, limit int) []int32 {
+	terms := Terms(q)
+	if len(terms) == 0 {
+		return nil
+	}
+	type docHit struct {
+		idx   int32
+		score int
+	}
+	var docs []docHit
+	inDoc := make(map[int32]bool, 4)
+	for i := range e.G.Nodes {
+		n := e.G.Nodes[i]
+		if n.FileType == model.FileTypeCode {
+			continue
+		}
+		hay := strings.ToLower(n.Label + " " + n.SourceFile)
+		score := 0
+		for _, t := range terms {
+			if strings.Contains(hay, t) {
+				score++
+			}
+		}
+		if score > 0 {
+			docs = append(docs, docHit{int32(i), score})
+		}
+	}
+	if len(docs) == 0 {
+		return nil
+	}
+	sort.SliceStable(docs, func(i, j int) bool {
+		if docs[i].score != docs[j].score {
+			return docs[i].score > docs[j].score
+		}
+		di, dj := e.G.Degree(docs[i].idx), e.G.Degree(docs[j].idx)
+		if di != dj {
+			return di > dj
+		}
+		return e.G.Nodes[docs[i].idx].Label < e.G.Nodes[docs[j].idx].Label
+	})
+	if len(docs) > 3 {
+		docs = docs[:3]
+	}
+	for _, d := range docs {
+		inDoc[d.idx] = true
+	}
+	seen := make(map[int32]bool, 8)
+	var out []int32
+	for i := range e.G.Edges {
+		edge := e.G.Edges[i]
+		if edge.Relation != "mentions" {
+			continue
+		}
+		s := e.G.Index(edge.Source)
+		t := e.G.Index(edge.Target)
+		if s < 0 || t < 0 || !inDoc[s] || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, int32(t))
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		di, dj := e.G.Degree(out[i]), e.G.Degree(out[j])
+		if di != dj {
+			return di > dj
+		}
+		return e.G.Nodes[out[i]].Label < e.G.Nodes[out[j]].Label
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
 // Query runs a natural-language-ish lookup and returns a textual subgraph plus
 // the matched node IDs.
 func (e *Engine) Query(q string, depth, tokenBudget int) (string, []string) {
-	idx := e.Score(q)
-	if len(idx) > 3 {
-		idx = idx[:3]
+	scored := e.Score(q)
+	// Prefer symbols; document headings and documentation file nodes only
+	// provide a starting point when the question is about a topic rather than a
+	// named symbol.
+	isFileNode := func(i int32) bool {
+		n := e.G.Nodes[i]
+		if model.IsFileExtLabel(n.Label) {
+			return true
+		}
+		if n.SourceFile == "" {
+			return false
+		}
+		base := path.Base(filepath.ToSlash(n.SourceFile))
+		return strings.EqualFold(n.Label, base)
+	}
+	pick := func(accept func(i int32) bool) []int32 {
+		out := make([]int32, 0, 3)
+		for _, i2 := range scored {
+			if accept(i2) {
+				out = append(out, i2)
+				if len(out) == 3 {
+					break
+				}
+			}
+		}
+		return out
+	}
+	idx := pick(func(i int32) bool {
+		return e.G.Nodes[i].FileType == model.FileTypeCode && !isFileNode(i)
+	})
+	if len(idx) == 0 {
+		// Document headings (concepts owned by a doc) are useful seeds too.
+		idx = pick(func(i int32) bool { return !isFileNode(i) })
+	}
+	if len(idx) == 0 {
+		idx = e.docMentions(q, 3)
 	}
 	if len(idx) == 0 {
 		return "No matching nodes found.", nil
@@ -336,6 +448,9 @@ func (e *Engine) GodNodes(top int) []string {
 	for i := range e.G.Nodes {
 		node := e.G.Nodes[i]
 		if e.G.IsFileNode(node) || node.SourceFile == "" {
+			continue
+		}
+		if node.FileType != "" && node.FileType != model.FileTypeCode {
 			continue
 		}
 		pairs = append(pairs, pair{node.Label, e.G.Degree(int32(i))})

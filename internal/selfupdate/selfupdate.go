@@ -128,6 +128,24 @@ func findAsset(r *release, name string) (string, bool) {
 	return "", false
 }
 
+// VerifySignature checks a base64 Ed25519 signature over data with a base64
+// public key. It is the single verification path shared by self-update, the
+// installers (via `graphify233 verify-release`) and the CLI.
+func VerifySignature(data []byte, sigB64, pubB64 string) error {
+	pub, err := base64.StdEncoding.DecodeString(strings.TrimSpace(pubB64))
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return errors.New("invalid public key")
+	}
+	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(sigB64))
+	if err != nil {
+		return errors.New("signature is not base64")
+	}
+	if !ed25519.Verify(ed25519.PublicKey(pub), data, sig) {
+		return errors.New("signature verification failed")
+	}
+	return nil
+}
+
 // Update downloads and installs the latest release. force reinstalls when the
 // running version already matches.
 func Update(ctx context.Context, out io.Writer, force bool) error {

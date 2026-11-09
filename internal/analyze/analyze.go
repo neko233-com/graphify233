@@ -46,6 +46,11 @@ func GodNodes(g *model.Graph, topN int) []GodNode {
 		if g.IsFileNode(n) || model.IsConceptNode(n) {
 			continue
 		}
+		// Documents and papers are not abstractions of the codebase; in deep
+		// mode their file nodes become hubs through "mentions" edges.
+		if n.FileType != "" && n.FileType != model.FileTypeCode {
+			continue
+		}
 		cands = append(cands, cand{idx: idx, deg: len(g.Adj()[idx])})
 	}
 	sort.SliceStable(cands, func(i, j int) bool {
@@ -112,8 +117,14 @@ func SurprisingConnections(g *model.Graph, comms [][]int32, topN int) []Surprise
 func crossFileSurprises(g *model.Graph, topN int) []Surprise {
 	out := make([]Surprise, 0, 32)
 	adj := g.Adj()
+	// A single document can mention dozens of symbols; keep at most two of its
+	// links so one README cannot monopolise the list.
+	mentionsFrom := map[string]int{}
 	for _, e := range g.Edges {
 		if structuralRelations[e.Relation] {
+			continue
+		}
+		if e.Relation == "mentions" && mentionsFrom[e.Source] >= 2 {
 			continue
 		}
 		s := g.Index(e.Source)
@@ -164,6 +175,9 @@ func crossFileSurprises(g *model.Graph, topN int) []Surprise {
 			Score: score, Why: why,
 			SourceFile: sn.SourceFile, TargetFile: tn.SourceFile,
 		})
+		if e.Relation == "mentions" {
+			mentionsFrom[e.Source]++
+		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Score != out[j].Score {

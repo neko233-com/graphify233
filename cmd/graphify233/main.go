@@ -4,8 +4,6 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -263,6 +261,9 @@ func printSummary(res *pipeline.Result) {
 		fmt.Printf(", failed %d", res.FilesFailed)
 	}
 	fmt.Printf(")  ·  outputs: %s\n", strings.Join(res.Outputs, ", "))
+	if res.Mentions > 0 {
+		fmt.Printf("deep mode: %d documentation mentions linked to code\n", res.Mentions)
+	}
 	if res.DetectTime > 0 {
 		fmt.Printf("phase: detect %s · extract %s · cluster %s · write %s\n",
 			res.DetectTime.Round(time.Millisecond), res.ExtractTime.Round(time.Millisecond),
@@ -741,10 +742,6 @@ func verifyReleaseCmd(args []string) error {
 	if *pubB64 == "" {
 		return errors.New("no public key: pass --pub or use a release build")
 	}
-	pub, err := base64.StdEncoding.DecodeString(*pubB64)
-	if err != nil || len(pub) != ed25519.PublicKeySize {
-		return errors.New("invalid public key")
-	}
 	data, err := os.ReadFile(*in)
 	if err != nil {
 		return err
@@ -753,12 +750,8 @@ func verifyReleaseCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sigRaw)))
-	if err != nil {
-		return errors.New("signature is not base64")
-	}
-	if !ed25519.Verify(ed25519.PublicKey(pub), data, sig) {
-		return errors.New("signature verification failed")
+	if err := selfupdate.VerifySignature(data, string(sigRaw), *pubB64); err != nil {
+		return err
 	}
 	fmt.Println("signature ok")
 	return nil

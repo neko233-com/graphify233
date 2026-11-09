@@ -109,8 +109,12 @@ Build flags: `--mode standard|deep`, `--update`, `--workers N`, `--out DIR`,
 --no-obsidian`, `--neo4j URL --neo4j-user --neo4j-pass`, `--quiet`.
 
 `--mode deep` never calls an LLM: extraction stays deterministic, and the flag
-widens the analysis (more god nodes and surprising connections) instead of
-running the original's semantic-subagent pass.
+widens the analysis (more god nodes and surprising connections) and links
+documentation to code. In deep mode every Markdown/text/PDF file is scanned for
+identifiers that match a uniquely named code symbol; each hit becomes an
+INFERRED `mentions` edge with a source line, so questions like "how does
+authentication work" can start from the docs. `graphify233 query` falls back to
+those mentions when no symbol name matches directly.
 
 `graphify233 install claude` writes the Claude Code skill and slash command into
 `~/.claude/`, and adds a short `<!-- graphify233:start -->` section to the
@@ -182,9 +186,15 @@ the whole pipeline still finishes in under half a second.
 
 ```sh
 go test ./...                 # golden-parity extraction tests + unit tests
-./release.ps1 -Version v0.1.0 # or ./release.sh v0.1.0
-./release.ps1 -Publish -Version v0.1.0   # gh release create
+go vet ./...                  # static checks
+./release.ps1 -Version v0.2.0 # or ./release.sh v0.2.0
+./release.ps1 -Publish -Version v0.2.0   # gh release create
 ```
+
+Tests cover extraction parity, clustering (including the multi-level modularity
+regression), analysis, exports (JSON round-trip, Cypher, GraphML, SVG, Canvas),
+query, MCP, hooks, installation, doc/code mentions, and the incremental
+pipeline (cache reuse, sensitive-file exclusion).
 
 Extraction is verified against the Python reference's own output:
 `tools/gen_goldens.py` regenerates `internal/extract/testdata/expected_*.json`
