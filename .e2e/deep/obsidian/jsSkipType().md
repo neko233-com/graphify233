@@ -1,0 +1,19 @@
+---
+source_file: "internal/extract/javascript.go"
+type: code
+community: 17
+location: "L305"
+tags:
+  - graphify/code
+  - graphify/EXTRACTED
+  - community/javascript.go
+---
+
+# jsSkipType()
+
+`internal/extract/javascript.go` L305
+
+## Connections
+
+- [[javascript.go]] - contains (EXTRACTED)
+- [[jsLexical()]] - calls (INFERRED)

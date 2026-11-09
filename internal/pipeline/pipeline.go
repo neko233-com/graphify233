@@ -214,8 +214,14 @@ func Run(opts Options) (*Result, error) {
 	}
 	cohesion := analyze.CohesionScores(g, comms)
 	labels := analyze.LabelCommunities(g, comms)
-	gods := analyze.GodNodes(g, 10)
-	surprises := analyze.SurprisingConnections(g, comms, 5)
+	godN, surpriseN := 10, 5
+	if opts.Mode == "deep" {
+		// The Go build never calls an LLM; "deep" widens the deterministic
+		// analysis instead of adding a semantic extraction pass.
+		godN, surpriseN = 20, 15
+	}
+	gods := analyze.GodNodes(g, godN)
+	surprises := analyze.SurprisingConnections(g, comms, surpriseN)
 	questions := analyze.SuggestedQuestions(g, comms, cohesion, labels)
 	clusterDur := time.Since(start) - detectDur - extractDur
 

@@ -1,0 +1,61 @@
+---
+type: community
+community: 0
+---
+
+# sample.c
+
+**50 nodes** · cohesion 0.05
+
+## Members
+
+- [[DataProcessor()]]
+- [[HttpClient()]]
+- [[Process()]]
+- [[Process() 2]]
+- [[Start()]]
+- [[Stop()]]
+- [[Validate()]]
+- [[__construct()]]
+- [[__init__()]]
+- [[addItem()]]
+- [[add_edge()]]
+- [[add_node()]]
+- [[buildRequest()]]
+- [[constructor()]]
+- [[create()]]
+- [[fetch()]]
+- [[forward()]]
+- [[get()]]
+- [[get() 2]]
+- [[initialize()]]
+- [[new()]]
+- [[post()]]
+- [[post() 2]]
+- [[process() 2]]
+- [[ApiClient]]
+- [[Attention Is All You Need]]
+- [[Config]]
+- [[DataProcessor]]
+- [[Graph]]
+- [[GraphifyDemo]]
+- [[HttpClient]]
+- [[HttpClientFactory]]
+- [[IProcessor]]
+- [[NewServer()]]
+- [[Processor]]
+- [[Server]]
+- [[Transformer]]
+- [[buildHeaders()]]
+- [[build_graph()]]
+- [[createClient()]]
+- [[extractScala()]]
+- [[main() 2]]
+- [[parseResponse()]]
+- [[parse_response()]]
+- [[process()]]
+- [[sample.c]]
+- [[scala.go]]
+- [[scalaDecls()]]
+- [[scalaDef()]]
+- [[validate()]]

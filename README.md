@@ -108,6 +108,10 @@ Build flags: `--mode standard|deep`, `--update`, `--workers N`, `--out DIR`,
 `--wiki --svg --graphml --cypher --canvas`, `--no-json --no-report --no-html
 --no-obsidian`, `--neo4j URL --neo4j-user --neo4j-pass`, `--quiet`.
 
+`--mode deep` never calls an LLM: extraction stays deterministic, and the flag
+widens the analysis (more god nodes and surprising connections) instead of
+running the original's semantic-subagent pass.
+
 `graphify233 install claude` writes the Claude Code skill and slash command into
 `~/.claude/`, and adds a short `<!-- graphify233:start -->` section to the
 project's `CLAUDE.md` and `.github/copilot-instructions.md`. Existing content is
