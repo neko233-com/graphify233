@@ -139,6 +139,16 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	old := cache.LoadManifest(opts.Root)
+	// Cached extractions are only valid for the extractor format that produced
+	// them; a version bump (schema or semantics) invalidates the whole cache.
+	toolTag := fmt.Sprintf("graphify233/extract-%d", extract.Version)
+	if old.Tool != "" && old.Tool != toolTag {
+		if _, err := cache.Clear(opts.Root); err != nil && opts.Logf != nil {
+			opts.Logf("cache: %v", err)
+		}
+		old = &cache.Manifest{}
+		opts.Update = false
+	}
 	if opts.Update && old.Files == nil {
 		opts.Update = false
 	}
@@ -323,6 +333,7 @@ func Run(opts Options) (*Result, error) {
 		m.Files[jobs[i].rel] = cache.FileEntry{Digest: digest, Size: fi.Size(), ModTime: fi.ModTime().UnixNano(), Kind: string(jobs[i].kind)}
 	}
 	m.Root = opts.Root
+	m.Tool = toolTag
 	m.Nodes = len(g.Nodes)
 	m.Edges = len(g.Edges)
 	m.Communities = len(comms)

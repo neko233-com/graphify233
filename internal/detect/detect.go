@@ -177,7 +177,7 @@ func (r *Result) finish() {
 	if !r.NeedsGraph {
 		r.Warning = fmt.Sprintf("Corpus is ~%s words - fits in a single context window. You may not need a graph.", humanInt(r.TotalWords))
 	} else if r.TotalWords >= CorpusUpperThreshold || r.TotalFiles >= FileCountUpper {
-		r.Warning = fmt.Sprintf("Large corpus: %d files · ~%s words. Extraction will be expensive; consider a subfolder or --no-semantic.", r.TotalFiles, humanInt(r.TotalWords))
+		r.Warning = fmt.Sprintf("Large corpus: %d files · ~%s words. Extraction will be expensive; consider a subfolder or --no-obsidian.", r.TotalFiles, humanInt(r.TotalWords))
 	}
 	sort.Strings(r.SkippedSensitive)
 }

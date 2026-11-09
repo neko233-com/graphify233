@@ -132,7 +132,9 @@ func SaveManifest(root string, m *Manifest) error {
 		return err
 	}
 	m.Version = 1
-	m.Tool = "graphify233"
+	if m.Tool == "" {
+		m.Tool = "graphify233"
+	}
 	m.GeneratedAt = time.Now()
 	tmp, err := os.CreateTemp(dir, ".manifest-*")
 	if err != nil {
