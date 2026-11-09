@@ -133,6 +133,20 @@ Tools: `query_graph`, `get_node`, `get_neighbors`, `get_community`,
 
 ## Performance
 
+Measured on this machine (Go 1.27.3, Windows/amd64, warm page cache):
+
+| Corpus | Files | Result | Time |
+| --- | --- | --- | --- |
+| Go `net/http` | 158 | 4,045 nodes · 8,178 edges · 104 communities | 491 ms full build |
+| Go standard library | 9,701 | 114,099 nodes · 188,135 edges · 5,360 communities | 5.7 s cold, 2.6 s incremental |
+| Mixed Python project | 19 | 148 nodes · 223 edges · 15 communities | 33 ms |
+
+For scale, the Python reference's tree-sitter extraction over the same
+`net/http` corpus takes **719 ms** for 158 files; `graphify233` spends **40 ms**
+extracting, and the remaining 451 ms is clustering, HTML/SVG/JSON generation and
+the Obsidian export. That is roughly an 18x speedup on the extraction stage, and
+the whole pipeline still finishes in under half a second.
+
 - Parallel file extraction (worker pool, one lexer pass per file).
 - Content-hash cache: unchanged files are never re-parsed; `--update` also
   short-circuits on size+mtime.

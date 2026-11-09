@@ -3,6 +3,7 @@
 package pipeline
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,7 +35,13 @@ type Formats struct {
 	GraphML  bool
 	Cypher   bool
 	Canvas   bool
+	// ObsidianForced overrides the node cap that protects huge corpora from
+	// writing one Markdown file per node.
+	ObsidianForced bool
 }
+
+// MaxObsidianNodes caps one-note-per-node output, which is one file per node.
+const MaxObsidianNodes = 20000
 
 // DefaultFormats matches the reference defaults: JSON, report, HTML and
 // Obsidian. Wiki/SVG/GraphML/Cypher/Canvas are opt-in.
@@ -58,6 +65,7 @@ type Options struct {
 // Result carries everything a caller (CLI, MCP, watch) needs after a run.
 type Result struct {
 	Root          string
+	OutDir        string
 	Graph         *model.Graph
 	Communities   [][]int32
 	Labels        map[int]string
@@ -72,8 +80,13 @@ type Result struct {
 	InputTokens   int
 	OutputTokens  int
 	Elapsed       time.Duration
+	DetectTime    time.Duration
+	ExtractTime   time.Duration
+	ClusterTime   time.Duration
+	WriteTime     time.Duration
 	Outputs       []string
 	Neo4jSent     int
+	Warnings      []string
 }
 
 type fileJob struct {
@@ -111,6 +124,7 @@ func Run(opts Options) (*Result, error) {
 	if det.TotalFiles == 0 {
 		return nil, fmt.Errorf("no supported files found under %s", opts.Root)
 	}
+	detectDur := time.Since(start)
 
 	jobs := make([]fileJob, 0, det.TotalFiles)
 	for kind, paths := range det.Files {
@@ -172,6 +186,7 @@ func Run(opts Options) (*Result, error) {
 		}()
 	}
 	wg.Wait()
+	extractDur := time.Since(start) - detectDur
 
 	exs := make([]model.Extraction, 0, len(results))
 	for i := range results {
@@ -192,13 +207,15 @@ func Run(opts Options) (*Result, error) {
 	gods := analyze.GodNodes(g, 10)
 	surprises := analyze.SurprisingConnections(g, comms, 5)
 	questions := analyze.SuggestedQuestions(g, comms, cohesion, labels)
+	clusterDur := time.Since(start) - detectDur - extractDur
 
 	inputTokens := det.TotalWords * 100 / 75
 	res := &Result{
-		Root: opts.Root, Graph: g, Communities: comms, Labels: labels, Cohesion: cohesion,
+		Root: opts.Root, OutDir: opts.OutDir, Graph: g, Communities: comms, Labels: labels, Cohesion: cohesion,
 		Gods: gods, Surprises: surprises, Questions: questions, Detection: det,
 		FilesExtract: int(extracted), FilesCached: int(cached), FilesFailed: int(failed),
 		InputTokens: inputTokens, OutputTokens: 0,
+		DetectTime: detectDur, ExtractTime: extractDur, ClusterTime: clusterDur,
 	}
 
 	if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
@@ -223,19 +240,36 @@ func Run(opts Options) (*Result, error) {
 		res.Outputs = append(res.Outputs, "GRAPH_REPORT.md")
 	}
 	if f.HTML {
-		if err := export.WriteHTML(filepath.Join(opts.OutDir, "graph.html"), g, comms, labels, cohesion, opts.Root); err != nil {
+		err := export.WriteHTML(filepath.Join(opts.OutDir, "graph.html"), g, comms, labels, cohesion, opts.Root)
+		switch {
+		case err == nil:
+			res.Outputs = append(res.Outputs, "graph.html")
+		case errors.Is(err, export.ErrTooLarge):
+			// The viewer has a hard node budget; skip it rather than failing a
+			// build that is otherwise complete.
+			res.Warnings = append(res.Warnings, err.Error())
+			if opts.Logf != nil {
+				opts.Logf("skipping graph.html: %v", err)
+			}
+		default:
 			return nil, err
 		}
-		res.Outputs = append(res.Outputs, "graph.html")
 	}
 	if f.Obsidian {
-		if _, err := export.WriteObsidian(filepath.Join(opts.OutDir, "obsidian"), g, comms, labels); err != nil {
+		if len(g.Nodes) > MaxObsidianNodes && !f.ObsidianForced {
+			msg := fmt.Sprintf("graph has %d nodes - skipping obsidian/ (pass --obsidian to force)", len(g.Nodes))
+			res.Warnings = append(res.Warnings, msg)
+			if opts.Logf != nil {
+				opts.Logf("%s", msg)
+			}
+		} else if _, err := export.WriteObsidian(filepath.Join(opts.OutDir, "obsidian"), g, comms, labels); err != nil {
 			return nil, err
+		} else {
+			if err := export.WriteObsidianIndex(filepath.Join(opts.OutDir, "obsidian"), g, labels, comms); err != nil {
+				return nil, err
+			}
+			res.Outputs = append(res.Outputs, "obsidian/")
 		}
-		if err := export.WriteObsidianIndex(filepath.Join(opts.OutDir, "obsidian"), g, labels, comms); err != nil {
-			return nil, err
-		}
-		res.Outputs = append(res.Outputs, "obsidian/")
 	}
 	if f.Wiki {
 		if err := export.WriteWiki(filepath.Join(opts.OutDir, "wiki"), g, comms, labels, cohesion, gods); err != nil {
@@ -297,6 +331,7 @@ func Run(opts Options) (*Result, error) {
 		return nil, err
 	}
 	res.Elapsed = time.Since(start)
+	res.WriteTime = res.Elapsed - detectDur - extractDur - clusterDur
 	return res, nil
 }
 

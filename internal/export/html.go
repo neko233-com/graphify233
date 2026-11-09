@@ -3,6 +3,7 @@ package export
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -12,6 +13,11 @@ import (
 
 // MaxNodesForViz mirrors the reference cap for the interactive viewer.
 const MaxNodesForViz = 5000
+
+// ErrTooLarge reports a graph that exceeds the interactive viewer's budget. It
+// is not fatal: the pipeline skips graph.html and keeps every other artifact.
+var ErrTooLarge = errors.New("graph too large for the interactive viewer")
+
 
 type vizNode struct {
 	ID    string  `json:"id"`
@@ -55,7 +61,7 @@ type vizPayload struct {
 // network access) using a Canvas 2D renderer.
 func WriteHTML(path string, g *model.Graph, comms [][]int32, labels map[int]string, cohesion []float64, root string) error {
 	if len(g.Nodes) > MaxNodesForViz {
-		return fmt.Errorf("graph has %d nodes, viewer supports at most %d - use --graphml or the wiki", len(g.Nodes), MaxNodesForViz)
+		return fmt.Errorf("%w: %d nodes (limit %d)", ErrTooLarge, len(g.Nodes), MaxNodesForViz)
 	}
 	pts := Layout(g, comms)
 

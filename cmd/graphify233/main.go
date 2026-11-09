@@ -121,6 +121,7 @@ Build flags:
   --out DIR              output directory (default <dir>/graphify-out)
   --wiki --svg --graphml --cypher --canvas
   --no-json --no-report --no-html --no-obsidian
+  --obsidian             force obsidian/ for very large graphs
   --neo4j URL --neo4j-user U --neo4j-pass P
   --quiet
 `)
@@ -206,6 +207,7 @@ func buildCmd(args []string, forceUpdate bool) error {
 	noReport := fs.Bool("no-report", false, "skip GRAPH_REPORT.md")
 	noHTML := fs.Bool("no-html", false, "skip graph.html")
 	noObsidian := fs.Bool("no-obsidian", false, "skip obsidian/")
+	forceObsidian := fs.Bool("obsidian", false, "write obsidian/ even for very large graphs")
 	neo4jURL := fs.String("neo4j", "", "push to Neo4j at URL")
 	neo4jUser := fs.String("neo4j-user", "neo4j", "Neo4j user")
 	neo4jPass := fs.String("neo4j-pass", "", "Neo4j password")
@@ -224,6 +226,7 @@ func buildCmd(args []string, forceUpdate bool) error {
 	formats.Report = !*noReport
 	formats.HTML = !*noHTML
 	formats.Obsidian = !*noObsidian
+	formats.ObsidianForced = *forceObsidian
 	formats.Wiki = *wiki
 	formats.SVG = *svg
 	formats.GraphML = *graphml
@@ -260,6 +263,11 @@ func printSummary(res *pipeline.Result) {
 		fmt.Printf(", failed %d", res.FilesFailed)
 	}
 	fmt.Printf(")  ·  outputs: %s\n", strings.Join(res.Outputs, ", "))
+	if res.DetectTime > 0 {
+		fmt.Printf("phase: detect %s · extract %s · cluster %s · write %s\n",
+			res.DetectTime.Round(time.Millisecond), res.ExtractTime.Round(time.Millisecond),
+			res.ClusterTime.Round(time.Millisecond), res.WriteTime.Round(time.Millisecond))
+	}
 	if len(res.Gods) > 0 {
 		names := make([]string, 0, 3)
 		for i, g := range res.Gods {
@@ -274,7 +282,11 @@ func printSummary(res *pipeline.Result) {
 		rep := benchmark.Run(res.Graph, d.TotalWords, nil)
 		fmt.Printf("query cost: ~%d tokens/query  ·  %.1fx fewer than the corpus\n", rep.AvgQueryTokens, rep.ReductionRatio)
 	}
-	fmt.Printf("report: %s\n", filepath.Join(res.Root, "graphify-out", "GRAPH_REPORT.md"))
+	outDir := res.OutDir
+	if outDir == "" {
+		outDir = filepath.Join(res.Root, "graphify-out")
+	}
+	fmt.Printf("report: %s\n", filepath.Join(outDir, "GRAPH_REPORT.md"))
 }
 
 func scanCmd(args []string) error {

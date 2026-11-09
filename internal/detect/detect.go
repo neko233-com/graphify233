@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/neko233-com/graphify233/internal/pdf"
@@ -309,18 +310,24 @@ func isSpaceByte(b byte) bool {
 
 // CountWords counts whitespace separated tokens in a string.
 func CountWords(s string) int {
-	var (
-		count  int
-		inWord bool
-	)
-	for i := 0; i < len(s); {
-		r, size := utf8.DecodeRuneInString(s[i:])
-		i += size
-		if r == ' ' || r == '\n' || r == '\t' || r == '\r' || r == '\v' || r == '\f' {
-			inWord = false
+	count := 0
+	inWord := false
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if b < utf8.RuneSelf {
+			if isSpaceByte(b) {
+				inWord = false
+			} else if !inWord {
+				count++
+				inWord = true
+			}
 			continue
 		}
-		if !inWord {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		i += size - 1
+		if unicode.IsSpace(r) {
+			inWord = false
+		} else if !inWord {
 			count++
 			inWord = true
 		}
