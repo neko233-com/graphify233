@@ -1,0 +1,325 @@
+// Package pipeline wires detection, extraction, graph building, clustering,
+// analysis and every output format into one deterministic run.
+package pipeline
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/neko233-com/graphify233/internal/analyze"
+	"github.com/neko233-com/graphify233/internal/cache"
+	"github.com/neko233-com/graphify233/internal/cluster"
+	"github.com/neko233-com/graphify233/internal/detect"
+	"github.com/neko233-com/graphify233/internal/export"
+	"github.com/neko233-com/graphify233/internal/extract"
+	"github.com/neko233-com/graphify233/internal/graphbuild"
+	"github.com/neko233-com/graphify233/internal/model"
+	"github.com/neko233-com/graphify233/internal/report"
+)
+
+// Formats selects which artifacts a run writes.
+type Formats struct {
+	JSON     bool
+	Report   bool
+	HTML     bool
+	Obsidian bool
+	Wiki     bool
+	SVG      bool
+	GraphML  bool
+	Cypher   bool
+	Canvas   bool
+}
+
+// DefaultFormats matches the reference defaults: JSON, report, HTML and
+// Obsidian. Wiki/SVG/GraphML/Cypher/Canvas are opt-in.
+func DefaultFormats() Formats {
+	return Formats{JSON: true, Report: true, HTML: true, Obsidian: true}
+}
+
+// Options controls a pipeline run.
+type Options struct {
+	Root    string
+	OutDir  string
+	Mode    string // "standard" or "deep"
+	Update  bool
+	Workers int
+	Formats Formats
+	Neo4j   *export.Neo4jConfig
+	Label   string // optional override for the report root label
+	Logf    func(format string, args ...any)
+}
+
+// Result carries everything a caller (CLI, MCP, watch) needs after a run.
+type Result struct {
+	Root          string
+	Graph         *model.Graph
+	Communities   [][]int32
+	Labels        map[int]string
+	Cohesion      []float64
+	Gods          []analyze.GodNode
+	Surprises     []analyze.Surprise
+	Questions     []string
+	Detection     *detect.Result
+	FilesExtract  int
+	FilesCached   int
+	FilesFailed   int
+	InputTokens   int
+	OutputTokens  int
+	Elapsed       time.Duration
+	Outputs       []string
+	Neo4jSent     int
+}
+
+type fileJob struct {
+	idx  int
+	path string
+	kind model.FileType
+	rel  string
+}
+
+// Run executes the full pipeline.
+func Run(opts Options) (*Result, error) {
+	start := time.Now()
+	if opts.Root == "" {
+		opts.Root = "."
+	}
+	if opts.OutDir == "" {
+		opts.OutDir = filepath.Join(opts.Root, "graphify-out")
+	}
+	if opts.Mode == "" {
+		opts.Mode = "standard"
+	}
+	if opts.Workers <= 0 {
+		opts.Workers = runtime.NumCPU()
+	}
+	logf := opts.Logf
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+
+	logf("Detecting files under %s", opts.Root)
+	det, err := detect.Detect(opts.Root)
+	if err != nil {
+		return nil, err
+	}
+	if det.TotalFiles == 0 {
+		return nil, fmt.Errorf("no supported files found under %s", opts.Root)
+	}
+
+	jobs := make([]fileJob, 0, det.TotalFiles)
+	for kind, paths := range det.Files {
+		for _, p := range paths {
+			jobs = append(jobs, fileJob{path: p, kind: string(kind)})
+		}
+	}
+	sort.Slice(jobs, func(i, j int) bool { return jobs[i].path < jobs[j].path })
+	for i := range jobs {
+		jobs[i].idx = i
+		jobs[i].rel = displayRel(opts.Root, jobs[i].path)
+	}
+
+	old := cache.LoadManifest(opts.Root)
+	if opts.Update && old.Files == nil {
+		opts.Update = false
+	}
+	results := make([]model.Extraction, len(jobs))
+	var extracted, cached, failed int64
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, opts.Workers)
+	for i := range jobs {
+		job := jobs[i]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			// Fast path: unchanged according to the manifest.
+			if opts.Update {
+				if e, ok := old.Files[job.rel]; ok {
+					if fi, err := os.Stat(job.path); err == nil && fi.Size() == e.Size && fi.ModTime().UnixNano() == e.ModTime {
+						if ex, ok := cache.Get(opts.Root, e.Digest); ok {
+							results[job.idx] = *ex
+							atomic.AddInt64(&cached, 1)
+							return
+						}
+					}
+				}
+			}
+			digest, err := cache.HashFile(job.path)
+			if err != nil {
+				atomic.AddInt64(&failed, 1)
+				return
+			}
+			if ex, ok := cache.Get(opts.Root, digest); ok && job.kind == model.FileTypeCode {
+				results[job.idx] = *ex
+				atomic.AddInt64(&cached, 1)
+				return
+			}
+			ex := extract.File(job.path, job.kind)
+			if ex.Error == "" {
+				_ = cache.Put(opts.Root, digest, &ex)
+			}
+			results[job.idx] = ex
+			atomic.AddInt64(&extracted, 1)
+		}()
+	}
+	wg.Wait()
+
+	exs := make([]model.Extraction, 0, len(results))
+	for i := range results {
+		exs = append(exs, results[i])
+	}
+	g := graphbuild.FromExtractions(exs)
+	g.BuildAdjacency()
+	logf("Graph: %d nodes, %d edges", len(g.Nodes), len(g.Edges))
+
+	comms := cluster.Detect(len(g.Nodes), g.Adj())
+	for ci, c := range comms {
+		for _, m := range c {
+			g.Nodes[m].Community = ci
+		}
+	}
+	cohesion := analyze.CohesionScores(g, comms)
+	labels := analyze.LabelCommunities(g, comms)
+	gods := analyze.GodNodes(g, 10)
+	surprises := analyze.SurprisingConnections(g, comms, 5)
+	questions := analyze.SuggestedQuestions(g, comms, cohesion, labels)
+
+	inputTokens := det.TotalWords * 100 / 75
+	res := &Result{
+		Root: opts.Root, Graph: g, Communities: comms, Labels: labels, Cohesion: cohesion,
+		Gods: gods, Surprises: surprises, Questions: questions, Detection: det,
+		FilesExtract: int(extracted), FilesCached: int(cached), FilesFailed: int(failed),
+		InputTokens: inputTokens, OutputTokens: 0,
+	}
+
+	if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
+		return nil, err
+	}
+	f := opts.Formats
+	if f.JSON {
+		if err := export.WriteJSON(filepath.Join(opts.OutDir, "graph.json"), g); err != nil {
+			return nil, err
+		}
+		res.Outputs = append(res.Outputs, "graph.json")
+	}
+	if f.Report {
+		d := report.Data{
+			Root: reportRoot(opts), Graph: g, Communities: comms, Cohesion: cohesion,
+			Labels: labels, GodNodes: gods, Surprises: surprises, Questions: questions,
+			Detection: det, Mode: opts.Mode, InputTokens: inputTokens, OutputTokens: 0,
+		}
+		if err := report.Write(filepath.Join(opts.OutDir, "GRAPH_REPORT.md"), d); err != nil {
+			return nil, err
+		}
+		res.Outputs = append(res.Outputs, "GRAPH_REPORT.md")
+	}
+	if f.HTML {
+		if err := export.WriteHTML(filepath.Join(opts.OutDir, "graph.html"), g, comms, labels, cohesion, opts.Root); err != nil {
+			return nil, err
+		}
+		res.Outputs = append(res.Outputs, "graph.html")
+	}
+	if f.Obsidian {
+		if _, err := export.WriteObsidian(filepath.Join(opts.OutDir, "obsidian"), g, comms, labels); err != nil {
+			return nil, err
+		}
+		if err := export.WriteObsidianIndex(filepath.Join(opts.OutDir, "obsidian"), g, labels, comms); err != nil {
+			return nil, err
+		}
+		res.Outputs = append(res.Outputs, "obsidian/")
+	}
+	if f.Wiki {
+		if err := export.WriteWiki(filepath.Join(opts.OutDir, "wiki"), g, comms, labels, cohesion, gods); err != nil {
+			return nil, err
+		}
+		res.Outputs = append(res.Outputs, "wiki/")
+	}
+	if f.SVG {
+		if err := export.WriteSVG(filepath.Join(opts.OutDir, "graph.svg"), g, comms, labels); err != nil {
+			return nil, err
+		}
+		res.Outputs = append(res.Outputs, "graph.svg")
+	}
+	if f.GraphML {
+		if err := export.WriteGraphML(filepath.Join(opts.OutDir, "graph.graphml"), g, comms, labels); err != nil {
+			return nil, err
+		}
+		res.Outputs = append(res.Outputs, "graph.graphml")
+	}
+	if f.Cypher {
+		if err := export.WriteCypher(filepath.Join(opts.OutDir, "graph.cypher"), g); err != nil {
+			return nil, err
+		}
+		res.Outputs = append(res.Outputs, "graph.cypher")
+	}
+	if f.Canvas {
+		if err := export.WriteCanvas(filepath.Join(opts.OutDir, "graph.canvas"), g, comms, labels); err != nil {
+			return nil, err
+		}
+		res.Outputs = append(res.Outputs, "graph.canvas")
+	}
+	if opts.Neo4j != nil {
+		n, err := export.PushNeo4j(g, *opts.Neo4j)
+		if err != nil {
+			return nil, fmt.Errorf("neo4j push: %w", err)
+		}
+		res.Neo4jSent = n
+	}
+
+	// Manifest for the next incremental run.
+	m := &cache.Manifest{Files: make(map[string]cache.FileEntry, len(jobs))}
+	for i := range jobs {
+		fi, err := os.Stat(jobs[i].path)
+		if err != nil {
+			continue
+		}
+		digest, err := cache.HashFile(jobs[i].path)
+		if err != nil {
+			continue
+		}
+		m.Files[jobs[i].rel] = cache.FileEntry{Digest: digest, Size: fi.Size(), ModTime: fi.ModTime().UnixNano(), Kind: string(jobs[i].kind)}
+	}
+	m.Root = opts.Root
+	m.Nodes = len(g.Nodes)
+	m.Edges = len(g.Edges)
+	m.Communities = len(comms)
+	m.TotalWords = det.TotalWords
+	if err := cache.SaveManifest(opts.Root, m); err != nil {
+		return nil, err
+	}
+	res.Elapsed = time.Since(start)
+	return res, nil
+}
+
+func reportRoot(opts Options) string {
+	if opts.Label != "" {
+		return opts.Label
+	}
+	if opts.Root == "." || opts.Root == "" {
+		if wd, err := os.Getwd(); err == nil {
+			return filepath.Base(wd)
+		}
+	}
+	return opts.Root
+}
+
+func displayRel(root, path string) string {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	base := filepath.ToSlash(filepath.Clean(root))
+	if root == "." || root == "" {
+		return clean
+	}
+	if rel, err := filepath.Rel(base, clean); err == nil && !filepath.IsAbs(rel) {
+		return filepath.ToSlash(rel)
+	}
+	return clean
+}

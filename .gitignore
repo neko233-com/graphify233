@@ -1,0 +1,18 @@
+# build output
+/dist/
+/bin/
+*.exe
+*.test
+
+# generated graph data is per project, never commit it
+graphify-out/
+
+# signing material: the private key must never be committed
+release/keys/*.key
+
+# editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
