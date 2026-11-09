@@ -1,6 +1,8 @@
 package analyze
 
 import (
+	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -104,6 +106,14 @@ var entryPoints = map[string]bool{
 	"setup": true, "run": true, "testmain": true,
 }
 
+// isSourceFileNode reports whether n is the file node for its own source
+// file (label equal to the file's base name), which is common for config
+// formats such as .tf, .sql, .yaml or Dockerfile whose extension is not in
+// model.codeExtSet.
+func isSourceFileNode(n *model.Node) bool {
+	return strings.EqualFold(n.Label, path.Base(filepath.ToSlash(n.SourceFile)))
+}
+
 // UnreferencedSymbols lists code symbols with no incoming non-structural edge:
 // likely dead code or public API that is only entered from outside the corpus.
 func UnreferencedSymbols(g *model.Graph, topN int) []Unreferenced {
@@ -123,6 +133,9 @@ func UnreferencedSymbols(g *model.Graph, topN int) []Unreferenced {
 			continue
 		}
 		if model.IsFileExtLabel(n.Label) || n.SourceFile == "" || referenced[i] {
+			continue
+		}
+		if isSourceFileNode(n) {
 			continue
 		}
 		if entryPoints[strings.ToLower(strings.TrimSuffix(n.Label, "()"))] {
