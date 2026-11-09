@@ -65,8 +65,10 @@ type Options struct {
 	Logf    func(format string, args ...any)
 
 	// Optional semantic layer. Concepts similarity is deterministic; the
-	// embeddings layer only runs when SemanticURL is set.
+	// embeddings layer runs offline with SemanticLocal or against an
+	// OpenAI-compatible endpoint when SemanticURL is set.
 	Semantic          bool
+	SemanticLocal     bool
 	SemanticURL       string
 	SemanticModel     string
 	SemanticKey       string
@@ -239,10 +241,16 @@ func Run(opts Options) (*Result, error) {
 	var semanticWarn string
 	if opts.Semantic {
 		semanticEdges = semantic.Concepts(g, 0.5, semantic.Limits{})
-		if opts.SemanticURL != "" {
-			client := &semantic.EmbeddingClient{URL: opts.SemanticURL, Model: opts.SemanticModel, APIKey: opts.SemanticKey}
+		var embedder semantic.Embedder
+		switch {
+		case opts.SemanticLocal:
+			embedder = semantic.HashingEmbedder{Dim: 1024}
+		case opts.SemanticURL != "":
+			embedder = &semantic.EmbeddingClient{URL: opts.SemanticURL, Model: opts.SemanticModel, APIKey: opts.SemanticKey}
+		}
+		if embedder != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			n, err := semantic.EmbeddingLinks(ctx, g, client, opts.SemanticThreshold, semantic.Limits{})
+			n, err := semantic.EmbeddingLinks(ctx, g, embedder, opts.SemanticThreshold, semantic.Limits{})
 			cancel()
 			if err != nil {
 				semanticWarn = "semantic embeddings skipped: " + err.Error()
@@ -255,6 +263,15 @@ func Run(opts Options) (*Result, error) {
 	logf("Graph: %d nodes, %d edges", len(g.Nodes), len(g.Edges))
 
 	comms := cluster.Detect(len(g.Nodes), g.Adj())
+	// Renumber by anchor node so community ids stay stable across re-runs;
+	// Detect's size ordering would shift every id when one file is added.
+	ids := make([]string, len(g.Nodes))
+	degs := make([]int32, len(g.Nodes))
+	for i, n := range g.Nodes {
+		ids[i] = n.ID
+		degs[i] = int32(g.Degree(int32(i)))
+	}
+	comms = cluster.StableOrder(comms, ids, degs)
 	for ci, c := range comms {
 		for _, m := range c {
 			g.Nodes[m].Community = ci

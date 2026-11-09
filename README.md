@@ -77,6 +77,7 @@ graphify233 path detect extract  # shortest path between two symbols
 graphify233 explain extract      # symbol detail and connections
 graphify233 diff old.json graph.json --impact
 graphify233 analyze              # cycles, unreferenced symbols, hubs
+graphify233 doctor               # environment and graph health check
 graphify233 serve-http           # JSON API + remote MCP on 127.0.0.1:7331
 graphify233 benchmark            # token-savings report
 ```
@@ -106,6 +107,7 @@ graphify233 path FROM TO            shortest path
 graphify233 diff OLD.json NEW.json  added/removed nodes and edges between snapshots
 graphify233 diff OLD NEW --impact   ... plus reverse dependencies of each change
 graphify233 analyze [dir]           cycles, unreferenced symbols, god nodes (--json)
+graphify233 doctor [dir]            graph/manifest/cache/update/token health check
 graphify233 benchmark [dir]         token reduction report
 graphify233 mcp [dir]               MCP server over stdio
 graphify233 serve-http [dir]        HTTP JSON API + streamable MCP at /mcp
@@ -123,8 +125,8 @@ graphify233 verify-release          verify a checksums manifest
 Build flags: `--mode standard|deep`, `--update`, `--workers N`, `--out DIR`,
 `--wiki --svg --graphml --cypher --canvas`, `--no-json --no-report --no-html
 --no-obsidian`, `--neo4j URL --neo4j-user --neo4j-pass`, `--quiet`,
-`--semantic [--semantic-url URL --semantic-model NAME --semantic-key KEY
---semantic-threshold 0.82]`.
+`--semantic [--semantic-local] [--semantic-url URL --semantic-model NAME
+--semantic-key KEY --semantic-threshold 0.82]`.
 
 `--mode deep` never calls an LLM: extraction stays deterministic, and the flag
 widens the analysis (more god nodes and surprising connections) and links
@@ -137,17 +139,49 @@ document concept nodes and link to the symbols mentioned in their section
 document concepts, then falls back to mentions.
 
 Optional semantic layer: `--semantic` adds `semantically_similar_to` edges
-between concept sections with overlapping (IDF-weighted) symbol sets. Passing
-`--semantic-url` additionally embeds symbol labels through any
-OpenAI-compatible `/embeddings` endpoint and connects nearest neighbours above
-`--semantic-threshold`. Both layers are opt-in; the default build stays local
-and network-free.
+between concept sections with overlapping (IDF-weighted) symbol sets.
+`--semantic-local` additionally embeds symbol labels with a deterministic
+offline hashing embedder (no network, no key), and `--semantic-url` uses any
+OpenAI-compatible `/embeddings` endpoint instead, connecting nearest neighbours
+above `--semantic-threshold`. The local embedder skips identically named symbols
+and requires a shared token, so generic names (`get`, `process`) do not form
+cliques from hash collisions. All layers are opt-in; the default build stays
+local and network-free.
+
+Communities are numbered by an anchor node (highest degree, smallest id on
+ties) rather than by size, so a rebuild of an unchanged tree reproduces the
+same ids and `graphify233 diff` reports only real drift.
 
 `graphify233 install claude` writes the Claude Code skill and slash command into
 `~/.claude/`, and adds a short `<!-- graphify233:start -->` section to the
 project's `CLAUDE.md` and `.github/copilot-instructions.md`. Existing content is
 preserved, re-running refreshes only that section, and `install uninstall`
 removes it again. `install vscode` merges a build task into `.vscode/tasks.json`.
+
+## GitHub Actions
+
+`action.yml` is a composite action: it installs the release binary, builds the
+graph, and uploads `graphify-out/` as an artifact.
+
+```yaml
+name: knowledge graph
+on: [push]
+jobs:
+  graph:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: neko233-com/graphify233@main
+        with:
+          path: .
+          mode: deep            # optional
+          version: latest       # or pin e.g. v0.5.0
+          upload-artifact: "true"
+```
+
+Outputs are `graph-json` and `summary`; the artifact contains graph.json,
+GRAPH_REPORT.md, graph.html, obsidian/ and wiki/. For private networks pin
+`version` and use the mirror environment variables from the install section.
 
 ## Languages
 
@@ -234,8 +268,9 @@ the whole pipeline still finishes in under half a second.
 ```sh
 go test ./...                 # golden-parity extraction tests + unit tests
 go vet ./...                  # static checks
-./release.ps1 -Version v0.4.0 # or ./release.sh v0.4.0
-./release.ps1 -Publish -Version v0.4.0   # gh release create
+bash scripts/e2e.sh           # build→query→analyze→diff→HTTP→MCP (+E2E_WATCH=1)
+./release.ps1 -Version v0.5.0 # or ./release.sh v0.5.0
+./release.ps1 -Publish -Version v0.5.0   # gh release create
 ```
 
 Tests cover extraction parity, clustering (including the multi-level modularity

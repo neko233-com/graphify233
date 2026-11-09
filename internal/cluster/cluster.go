@@ -76,6 +76,39 @@ func sortCommunities(comms [][]int32) {
 	})
 }
 
+// StableOrder renumbers communities so that their indices survive re-runs.
+// Detect orders communities by size, so a single added file shifts every id
+// and makes a graph diff look like massive community drift. Here each
+// community is anchored to its highest-degree member (ties broken by the
+// smaller node id) and communities are ordered by anchor id; unchanged
+// communities keep their index, and a node's movement is actually visible in
+// "community moved" output. Members keep their ascending index order.
+func StableOrder(comms [][]int32, ids []string, deg []int32) [][]int32 {
+	if len(comms) < 2 {
+		return comms
+	}
+	type entry struct {
+		comm   []int32
+		anchor string
+	}
+	entries := make([]entry, 0, len(comms))
+	for _, c := range comms {
+		best := c[0]
+		for _, m := range c[1:] {
+			if deg[m] > deg[best] || (deg[m] == deg[best] && ids[m] < ids[best]) {
+				best = m
+			}
+		}
+		entries = append(entries, entry{comm: c, anchor: ids[best]})
+	}
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].anchor < entries[j].anchor })
+	out := make([][]int32, len(entries))
+	for i := range entries {
+		out[i] = entries[i].comm
+	}
+	return out
+}
+
 // splitOversized re-clusters a too-large community on its induced subgraph.
 func splitOversized(members []int32, adj [][]int32, maxSize, depth int) [][]int32 {
 	if len(members) <= maxSize || depth >= MaxSplitDepth {

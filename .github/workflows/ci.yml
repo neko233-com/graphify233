@@ -36,3 +36,16 @@ jobs:
 
       - name: test
         run: go test ./... -count=1
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: end-to-end chain (build, query, diff, HTTP, MCP, watch)
+        run: E2E_WATCH=1 bash scripts/e2e.sh

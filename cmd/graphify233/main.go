@@ -22,6 +22,7 @@ import (
 	"github.com/neko233-com/graphify233/internal/cache"
 	"github.com/neko233-com/graphify233/internal/detect"
 	"github.com/neko233-com/graphify233/internal/export"
+	"github.com/neko233-com/graphify233/internal/extract"
 	"github.com/neko233-com/graphify233/internal/hooks"
 	"github.com/neko233-com/graphify233/internal/httpapi"
 	"github.com/neko233-com/graphify233/internal/install"
@@ -83,6 +84,8 @@ func run(args []string) error {
 		return addCmd(rest)
 	case "cache":
 		return cacheCmd(rest)
+	case "doctor":
+		return doctorCmd(rest)
 	case "watch":
 		return watchCmd(rest)
 	case "self-update", "upgrade":
@@ -122,6 +125,7 @@ Usage:
   graphify233 hook install|uninstall|status [dir]
   graphify233 install [claude|vscode|all|uninstall] [dir]  editor integration
   graphify233 self-update [--check|--force]
+  graphify233 doctor [dir]               check graph, cache, hook, update status
   graphify233 version
 
 Build flags:
@@ -129,6 +133,10 @@ Build flags:
   --update               reuse cached extractions
   --workers N            parallel extractors (default: CPU count)
   --out DIR              output directory (default <dir>/graphify-out)
+  --semantic             add opt-in similarity edges (--semantic-local for offline)
+  --semantic-local       offline hashing embeddings (no network, no API key)
+  --semantic-url URL     OpenAI-compatible embeddings endpoint
+  --semantic-threshold F similarity threshold (default 0.82)
   --wiki --svg --graphml --cypher --canvas
   --no-json --no-report --no-html --no-obsidian
   --obsidian             force obsidian/ for very large graphs
@@ -257,6 +265,7 @@ func buildCmd(args []string, forceUpdate bool) error {
 	neo4jPass := fs.String("neo4j-pass", "", "Neo4j password")
 	quiet := fs.Bool("quiet", false, "suppress progress output")
 	semantic := fs.Bool("semantic", false, "add opt-in similarity edges (concepts, optional embeddings)")
+	semanticLocal := fs.Bool("semantic-local", false, "offline hashing embeddings (no network, no API key)")
 	semanticURL := fs.String("semantic-url", "", "OpenAI-compatible embeddings endpoint")
 	semanticModel := fs.String("semantic-model", "text-embedding-3-small", "embeddings model")
 	semanticKey := fs.String("semantic-key", os.Getenv("GRAPHIFY233_EMBED_KEY"), "embeddings API key")
@@ -289,7 +298,8 @@ func buildCmd(args []string, forceUpdate bool) error {
 	opts := pipeline.Options{
 		Root: root, OutDir: *out, Mode: *mode, Update: *update, Workers: *workers,
 		Formats: formats, Logf: logf,
-		Semantic: *semantic, SemanticURL: *semanticURL, SemanticModel: *semanticModel,
+		Semantic: *semantic, SemanticLocal: *semanticLocal,
+		SemanticURL: *semanticURL, SemanticModel: *semanticModel,
 		SemanticKey: *semanticKey, SemanticThreshold: *semanticThreshold,
 	}
 	if *neo4jURL != "" {
@@ -919,6 +929,80 @@ func cacheCmd(args []string) error {
 		}
 	default:
 		return fmt.Errorf("unknown cache action %q", action)
+	}
+	return nil
+}
+
+func doctorCmd(args []string) error {
+	root, _ := splitDir(args)
+	if root == "" {
+		root = "."
+	}
+	abs, _ := filepath.Abs(root)
+	fmt.Printf("graphify233 doctor — %s\n", abs)
+	fmt.Printf("version: %s (%s/%s)\n", selfupdate.Version, runtime.GOOS, runtime.GOARCH)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	if latest, err := selfupdate.Check(ctx); err != nil {
+		fmt.Printf("! update check failed: %v\n", err)
+	} else if latest != "" && latest != selfupdate.Version {
+		fmt.Printf("! update available: %s → %s (run: graphify233 self-update)\n", selfupdate.Version, latest)
+	} else {
+		fmt.Println("✓ up to date")
+	}
+	cancel()
+
+	manifest := cache.LoadManifest(root)
+	graphPath := filepath.Join(root, "graphify-out", "graph.json")
+	if fi, err := os.Stat(graphPath); err != nil {
+		fmt.Printf("! graph: missing %s\n  run: graphify233 build %s\n", graphPath, root)
+	} else {
+		g, err := export.LoadJSON(graphPath)
+		if err != nil {
+			fmt.Printf("! graph: unreadable (%v)\n", err)
+		} else {
+			comms := 0
+			for _, n := range g.Nodes {
+				if n.Community+1 > comms {
+					comms = n.Community + 1
+				}
+			}
+			fmt.Printf("✓ graph: %d nodes · %d edges · %d communities (%.1f KiB, modified %s)\n",
+				len(g.Nodes), len(g.Edges), comms, float64(fi.Size())/1024, fi.ModTime().Format("2006-01-02 15:04"))
+			if len(manifest.Files) > 0 && (manifest.Nodes != len(g.Nodes) || manifest.Edges != len(g.Edges)) {
+				fmt.Printf("! graph may be stale: manifest records %d nodes · %d edges (run build --update)\n", manifest.Nodes, manifest.Edges)
+			}
+		}
+	}
+
+	want := fmt.Sprintf("graphify233/extract-%d", extract.Version)
+	switch {
+	case manifest.Tool == "" && len(manifest.Files) == 0:
+		fmt.Println("- manifest: none yet (first build will create it)")
+	case manifest.Tool != want:
+		fmt.Printf("! manifest tool %q is stale (want %q); next build clears the cache\n", manifest.Tool, want)
+	default:
+		fmt.Printf("✓ manifest: %d files · %d words · built %s\n", len(manifest.Files), manifest.TotalWords, manifest.GeneratedAt.Format("2006-01-02 15:04"))
+	}
+
+	if entries, err := os.ReadDir(cache.Dir(root)); err == nil {
+		fmt.Printf("✓ cache: %d file(s) in %s\n", len(entries), cache.Dir(root))
+	} else {
+		fmt.Printf("- cache: empty (%s)\n", cache.Dir(root))
+	}
+
+	if dir, installed, err := hooks.Status(root); err != nil {
+		fmt.Printf("- git hook: not available (%v)\n", err)
+	} else if installed {
+		fmt.Printf("✓ git hook: installed at %s\n", dir)
+	} else {
+		fmt.Println("- git hook: not installed (graphify233 hook install)")
+	}
+
+	if os.Getenv("GRAPHIFY233_HTTP_TOKEN") != "" {
+		fmt.Println("✓ serve-http token: GRAPHIFY233_HTTP_TOKEN is set")
+	} else {
+		fmt.Println("- serve-http token: GRAPHIFY233_HTTP_TOKEN unset (pass --token)")
 	}
 	return nil
 }

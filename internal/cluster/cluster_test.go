@@ -134,3 +134,28 @@ func TestDetectIsolatesAndCohesion(t *testing.T) {
 		t.Fatalf("cohesion out of range: %f", c)
 	}
 }
+
+func TestStableOrderAnchorsCommunities(t *testing.T) {
+	ids := []string{"zeta", "alpha", "mu", "beta"}
+	deg := []int32{5, 5, 1, 2}
+	comms := [][]int32{{2, 3}, {0, 1}}
+	got := StableOrder(comms, ids, deg)
+	if got[0][0] != 0 || got[1][0] != 2 {
+		t.Fatalf("anchor order = %v, want communities {0,1} then {2,3}", got)
+	}
+	// Input order must not matter: the same partition passed in reverse
+	// yields the same ids.
+	rev := StableOrder([][]int32{{0, 1}, {2, 3}}, ids, deg)
+	if !reflect.DeepEqual(got, rev) {
+		t.Fatalf("order depends on input order: %v vs %v", got, rev)
+	}
+}
+
+func TestStableOrderTieBreaksByID(t *testing.T) {
+	ids := []string{"b", "a"}
+	deg := []int32{2, 2}
+	got := StableOrder([][]int32{{0}, {1}}, ids, deg)
+	if got[0][0] != 1 {
+		t.Fatalf("tie should put community anchored at %q first: %v", "a", got)
+	}
+}

@@ -119,3 +119,27 @@ func TestEmbeddingClientError(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 }
+
+func TestHashingEmbedderLinksRelatedIdentifiers(t *testing.T) {
+	g := model.New()
+	for _, n := range []model.Node{
+		{ID: "login_user", Label: "login_user()", FileType: model.FileTypeCode, SourceFile: "auth.go", Community: -1},
+		{ID: "user_login", Label: "user_login()", FileType: model.FileTypeCode, SourceFile: "auth.go", Community: -1},
+		{ID: "render_page", Label: "render_page()", FileType: model.FileTypeCode, SourceFile: "web.go", Community: -1},
+	} {
+		g.AddNode(n)
+	}
+	n, err := EmbeddingLinks(context.Background(), g, HashingEmbedder{Dim: 256}, 0.8, Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 {
+		t.Fatal("expected at least one similarity edge")
+	}
+	if !g.HasEdge("login_user", "user_login") {
+		t.Fatal("related identifiers should be linked")
+	}
+	if g.HasEdge("render_page", "login_user") {
+		t.Fatal("unrelated identifiers should not be linked")
+	}
+}

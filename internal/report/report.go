@@ -114,7 +114,18 @@ func Render(d Data) string {
 	}
 
 	b.WriteString("## Communities\n")
-	for i, c := range d.Communities {
+	order := make([]int, len(d.Communities))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, c int) bool {
+		if len(d.Communities[order[a]]) != len(d.Communities[order[c]]) {
+			return len(d.Communities[order[a]]) > len(d.Communities[order[c]])
+		}
+		return order[a] < order[c]
+	})
+	for _, i := range order {
+		c := d.Communities[i]
 		label := d.Labels[i]
 		if label == "" {
 			label = "Community " + strconv.Itoa(i)

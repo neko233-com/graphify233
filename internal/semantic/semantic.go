@@ -131,6 +131,12 @@ func Concepts(g *model.Graph, minJaccard float64, lim Limits) int {
 	return added
 }
 
+// Embedder turns texts into vectors. EmbeddingClient uses a remote
+// OpenAI-compatible service; HashingEmbedder runs locally with no network.
+type Embedder interface {
+	Embed(ctx context.Context, texts []string) ([][]float64, error)
+}
+
 // EmbeddingClient talks to an OpenAI-compatible /embeddings endpoint.
 type EmbeddingClient struct {
 	URL    string
@@ -203,15 +209,96 @@ func (c *EmbeddingClient) Embed(ctx context.Context, texts []string) ([][]float6
 	return vecs, nil
 }
 
+// HashingEmbedder is a deterministic, offline embedder. Texts are split into
+// lowercase alphanumeric tokens, each token is hashed into one of Dim buckets
+// (FNV-1a) with a sign bit, weighted by inverse document frequency so common
+// tokens such as the project name or "readme" do not dominate, and the vector
+// is L2-normalised. Labels sharing informative tokens end up close, so related
+// identifiers connect without a network call, model, or API key.
+type HashingEmbedder struct {
+	Dim int
+}
+
+// Embed implements Embedder.
+func (h HashingEmbedder) Embed(_ context.Context, texts []string) ([][]float64, error) {
+	dim := h.Dim
+	if dim <= 0 {
+		dim = 512
+	}
+	tokenDocs := make([][]string, len(texts))
+	df := make(map[string]int)
+	for i, text := range texts {
+		toks := tokenize(text)
+		tokenDocs[i] = toks
+		seen := make(map[string]bool, len(toks))
+		for _, tok := range toks {
+			if !seen[tok] {
+				seen[tok] = true
+				df[tok]++
+			}
+		}
+	}
+	out := make([][]float64, len(texts))
+	n := float64(len(texts))
+	for i, toks := range tokenDocs {
+		vec := make([]float64, dim)
+		for _, tok := range toks {
+			sum := fnv32a(tok)
+			w := math.Log(1 + n/float64(df[tok]))
+			idx := int(sum % uint32(dim))
+			if sum&(1<<31) != 0 {
+				vec[idx] -= w
+			} else {
+				vec[idx] += w
+			}
+		}
+		var norm float64
+		for _, x := range vec {
+			norm += x * x
+		}
+		if norm > 0 {
+			norm = math.Sqrt(norm)
+			for j := range vec {
+				vec[j] /= norm
+			}
+		}
+		out[i] = vec
+	}
+	return out, nil
+}
+
+func tokenize(text string) []string {
+	fields := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	})
+	out := fields[:0]
+	for _, tok := range fields {
+		if len(tok) >= 2 {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+func fnv32a(s string) uint32 {
+	const offset, prime uint32 = 2166136261, 16777619
+	h := offset
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= prime
+	}
+	return h
+}
+
 // EmbeddingLinks embeds symbol labels and connects each symbol to its most
 // similar neighbours above threshold. This is the explicit opt-in semantic
-// layer: it only runs when the caller configures an endpoint.
-func EmbeddingLinks(ctx context.Context, g *model.Graph, client *EmbeddingClient, threshold float64, lim Limits) (int, error) {
+// layer: it only runs when the caller configures an embedder.
+func EmbeddingLinks(ctx context.Context, g *model.Graph, client Embedder, threshold float64, lim Limits) (int, error) {
 	lim = lim.withDefaults()
 	if threshold <= 0 || threshold > 1 {
 		threshold = 0.82
 	}
-	if client == nil || client.URL == "" {
+	if client == nil {
 		return 0, nil
 	}
 	var ids []int32
@@ -237,6 +324,30 @@ func EmbeddingLinks(ctx context.Context, g *model.Graph, client *EmbeddingClient
 	if err != nil {
 		return 0, err
 	}
+	// The hashing embedder is a bag-of-tokens model: disjoint token sets mean
+	// unrelated texts, and rare hash collisions of distinct single-token
+	// labels (main vs graphmlDoc) must not fabricate neighbours. Gate
+	// candidates on an actual shared token; external embedders are left
+	// ungated because they are supposed to generalise beyond exact tokens.
+	var gate func(i, j int) bool
+	if _, ok := client.(HashingEmbedder); ok {
+		sets := make([]map[string]bool, len(texts))
+		for i, text := range texts {
+			s := make(map[string]bool, 4)
+			for _, tok := range tokenize(text) {
+				s[tok] = true
+			}
+			sets[i] = s
+		}
+		gate = func(i, j int) bool {
+			for tok := range sets[i] {
+				if sets[j][tok] {
+					return true
+				}
+			}
+			return false
+		}
+	}
 	norm := make([]float64, len(vecs))
 	for i, v := range vecs {
 		var s float64
@@ -261,6 +372,15 @@ func EmbeddingLinks(ctx context.Context, g *model.Graph, client *EmbeddingClient
 				continue
 			}
 			if g.HasEdge(g.Nodes[ids[i]].ID, g.Nodes[ids[j]].ID) {
+				continue
+			}
+			// Identically named symbols in different scopes (main, init,
+			// String) are not semantic neighbours; linking every pair would
+			// bury the useful edges.
+			if strings.EqualFold(texts[i], texts[j]) {
+				continue
+			}
+			if gate != nil && !gate(i, j) {
 				continue
 			}
 			cos := cosine(vecs[i], vecs[j], norm[i], norm[j])

@@ -1,0 +1,74 @@
+name: graphify233
+description: Build a deterministic knowledge graph of the repository and expose it as an artifact
+author: neko233-com
+branding:
+  icon: share-2
+  color: blue
+
+inputs:
+  path:
+    description: Directory to scan
+    required: false
+    default: "."
+  mode:
+    description: "standard or deep (deep also links docs to code)"
+    required: false
+    default: "standard"
+  version:
+    description: graphify233 version to install ("latest" or a tag such as v0.4.2)
+    required: false
+    default: "latest"
+  upload-artifact:
+    description: Upload graphify-out as an artifact
+    required: false
+    default: "true"
+  artifact-name:
+    description: Artifact name
+    required: false
+    default: graphify233-graph
+
+outputs:
+  graph-json:
+    description: Path to graph.json
+    value: ${{ steps.build.outputs.graph-json }}
+  summary:
+    description: One-line graph summary (files, nodes, edges, communities)
+    value: ${{ steps.build.outputs.summary }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install graphify233
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        if ! command -v graphify233 >/dev/null 2>&1; then
+          args=(--dir "$HOME/.local/bin")
+          if [ "$VERSION" != "latest" ]; then args+=(--version "$VERSION"); fi
+          curl -fsSL https://raw.githubusercontent.com/neko233-com/graphify233/main/install.sh | sh -s -- "${args[@]}"
+        fi
+        graphify233 version
+
+    - name: Build knowledge graph
+      id: build
+      shell: bash
+      env:
+        SCAN_PATH: ${{ inputs.path }}
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        graphify233 build "$SCAN_PATH" --mode "$MODE" --update
+        graph="$SCAN_PATH/graphify-out/graph.json"
+        echo "graph-json=$graph" >> "$GITHUB_OUTPUT"
+        summary=$(graphify233 analyze "$SCAN_PATH" 2>/dev/null | head -n 1 || true)
+        echo "summary=$summary" >> "$GITHUB_OUTPUT"
+
+    - name: Upload graph artifact
+      if: inputs.upload-artifact == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.path }}/graphify-out
+        if-no-files-found: error
