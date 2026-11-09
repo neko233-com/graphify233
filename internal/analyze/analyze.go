@@ -184,7 +184,7 @@ func crossCommunitySurprises(g *model.Graph, comms [][]int32, topN int) []Surpri
 	if len(comms) == 0 {
 		bc := Betweenness(g, 0)
 		type edgeBC struct {
-			e    *model.Edge
+			e     *model.Edge
 			score float64
 		}
 		ranked := make([]edgeBC, 0, len(g.Edges))
@@ -206,8 +206,8 @@ func crossCommunitySurprises(g *model.Graph, comms [][]int32, topN int) []Surpri
 				Source: e.Source, SourceLabel: s.Label,
 				Target: e.Target, TargetLabel: t.Label,
 				Relation: e.Relation, Confidence: e.Confidence,
-				Score: ranked[i].score,
-				Why:   []string{"bridges graph structure"},
+				Score:      ranked[i].score,
+				Why:        []string{"bridges graph structure"},
 				SourceFile: s.SourceFile, TargetFile: t.SourceFile,
 			})
 		}
@@ -260,8 +260,8 @@ func crossCommunitySurprises(g *model.Graph, comms [][]int32, topN int) []Surpri
 			Source: c.e.Source, SourceLabel: sn.Label,
 			Target: c.e.Target, TargetLabel: tn.Label,
 			Relation: c.e.Relation, Confidence: c.e.Confidence,
-			Score: float64(confRank(c.e.Confidence)),
-			Why:   []string{"bridges communities"},
+			Score:      float64(confRank(c.e.Confidence)),
+			Why:        []string{"bridges communities"},
 			SourceFile: sn.SourceFile, TargetFile: tn.SourceFile,
 		})
 		if len(out) >= topN {
@@ -321,9 +321,9 @@ func SuggestedQuestions(g *model.Graph, comms [][]int32, cohesion []float64, lab
 
 	adj := g.Adj()
 	type hub struct {
-		idx    int32
-		deg    int
-		infer  int
+		idx   int32
+		deg   int
+		infer int
 	}
 	hubs := make([]hub, 0, 8)
 	inferredCount := make(map[int32]int, 16)

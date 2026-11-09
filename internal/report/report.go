@@ -16,17 +16,17 @@ import (
 
 // Data is everything the report needs.
 type Data struct {
-	Root        string
-	Graph       *model.Graph
-	Communities [][]int32
-	Cohesion    []float64
-	Labels      map[int]string
-	GodNodes    []analyze.GodNode
-	Surprises   []analyze.Surprise
-	Questions   []string
-	Detection   *detect.Result
-	Mode        string
-	InputTokens int
+	Root         string
+	Graph        *model.Graph
+	Communities  [][]int32
+	Cohesion     []float64
+	Labels       map[int]string
+	GodNodes     []analyze.GodNode
+	Surprises    []analyze.Surprise
+	Questions    []string
+	Detection    *detect.Result
+	Mode         string
+	InputTokens  int
 	OutputTokens int
 }
 

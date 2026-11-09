@@ -50,7 +50,7 @@ func phpDecls(b *Builder, src string, toks []lex.Token, start, end int, cid stri
 				raw := strings.TrimSpace(src[toks[i+1].Start:toks[stop-1].End])
 				parts := strings.Split(raw, "\\")
 				target := strings.TrimSpace(parts[len(parts)-1])
-				target = strings.TrimSuffix(target, "}");
+				target = strings.TrimSuffix(target, "}")
 				if target != "" {
 					b.Edge(b.FileID, MakeID(target), "imports", line)
 				}

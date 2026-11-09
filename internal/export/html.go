@@ -18,7 +18,6 @@ const MaxNodesForViz = 5000
 // is not fatal: the pipeline skips graph.html and keeps every other artifact.
 var ErrTooLarge = errors.New("graph too large for the interactive viewer")
 
-
 type vizNode struct {
 	ID    string  `json:"id"`
 	Label string  `json:"label"`
@@ -33,10 +32,10 @@ type vizNode struct {
 }
 
 type vizLink struct {
-	S    int32   `json:"s"`
-	T    int32   `json:"t"`
-	Rel  string  `json:"rel"`
-	Conf string  `json:"conf"`
+	S    int32  `json:"s"`
+	T    int32  `json:"t"`
+	Rel  string `json:"rel"`
+	Conf string `json:"conf"`
 }
 
 type vizCommunity struct {

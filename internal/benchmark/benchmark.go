@@ -32,13 +32,13 @@ type Question struct {
 
 // Report is the benchmark result.
 type Report struct {
-	CorpusTokens  int        `json:"corpus_tokens"`
-	CorpusWords   int        `json:"corpus_words"`
-	Nodes         int        `json:"nodes"`
-	Edges         int        `json:"edges"`
-	AvgQueryTokens int       `json:"avg_query_tokens"`
-	ReductionRatio float64   `json:"reduction_ratio"`
-	Questions     []Question `json:"per_question"`
+	CorpusTokens   int        `json:"corpus_tokens"`
+	CorpusWords    int        `json:"corpus_words"`
+	Nodes          int        `json:"nodes"`
+	Edges          int        `json:"edges"`
+	AvgQueryTokens int        `json:"avg_query_tokens"`
+	ReductionRatio float64    `json:"reduction_ratio"`
+	Questions      []Question `json:"per_question"`
 }
 
 // EstimateTokens approximates a token count from a character count.
@@ -138,11 +138,11 @@ func Run(g *model.Graph, corpusWords int, questions []string) Report {
 		questions = DefaultQuestions
 	}
 	r := Report{
-		CorpusWords:   corpusWords,
-		CorpusTokens:  corpusWords * 100 / 75,
-		Nodes:         len(g.Nodes),
-		Edges:         len(g.Edges),
-		Questions:     make([]Question, 0, len(questions)),
+		CorpusWords:  corpusWords,
+		CorpusTokens: corpusWords * 100 / 75,
+		Nodes:        len(g.Nodes),
+		Edges:        len(g.Edges),
+		Questions:    make([]Question, 0, len(questions)),
 	}
 	total, matched := 0, 0
 	for _, q := range questions {

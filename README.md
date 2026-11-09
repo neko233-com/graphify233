@@ -96,7 +96,9 @@ graphify233 mcp [dir]               MCP server over stdio
 graphify233 watch [dir]             rebuild on file changes
 graphify233 add URL [dir]           ingest a web page into the graph
 graphify233 hook install|status|uninstall
-graphify233 install claude          install the Claude Code skill + command
+graphify233 install claude [dir]    Claude Code skill + slash command + project guidance
+graphify233 install vscode [dir]    add a VS Code build task
+graphify233 install uninstall [dir] remove all of the above
 graphify233 cache clear|info
 graphify233 self-update             verified self-update
 graphify233 verify-release          verify a checksums manifest
@@ -105,6 +107,12 @@ graphify233 verify-release          verify a checksums manifest
 Build flags: `--mode standard|deep`, `--update`, `--workers N`, `--out DIR`,
 `--wiki --svg --graphml --cypher --canvas`, `--no-json --no-report --no-html
 --no-obsidian`, `--neo4j URL --neo4j-user --neo4j-pass`, `--quiet`.
+
+`graphify233 install claude` writes the Claude Code skill and slash command into
+`~/.claude/`, and adds a short `<!-- graphify233:start -->` section to the
+project's `CLAUDE.md` and `.github/copilot-instructions.md`. Existing content is
+preserved, re-running refreshes only that section, and `install uninstall`
+removes it again. `install vscode` merges a build task into `.vscode/tasks.json`.
 
 ## Languages
 

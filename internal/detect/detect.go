@@ -281,8 +281,8 @@ func wordCountFile(path string) int {
 	}
 	defer f.Close()
 	var (
-		buf   [64 * 1024]byte
-		count int
+		buf    [64 * 1024]byte
+		count  int
 		inWord bool
 	)
 	for {

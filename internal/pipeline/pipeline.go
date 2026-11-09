@@ -64,29 +64,29 @@ type Options struct {
 
 // Result carries everything a caller (CLI, MCP, watch) needs after a run.
 type Result struct {
-	Root          string
-	OutDir        string
-	Graph         *model.Graph
-	Communities   [][]int32
-	Labels        map[int]string
-	Cohesion      []float64
-	Gods          []analyze.GodNode
-	Surprises     []analyze.Surprise
-	Questions     []string
-	Detection     *detect.Result
-	FilesExtract  int
-	FilesCached   int
-	FilesFailed   int
-	InputTokens   int
-	OutputTokens  int
-	Elapsed       time.Duration
-	DetectTime    time.Duration
-	ExtractTime   time.Duration
-	ClusterTime   time.Duration
-	WriteTime     time.Duration
-	Outputs       []string
-	Neo4jSent     int
-	Warnings      []string
+	Root         string
+	OutDir       string
+	Graph        *model.Graph
+	Communities  [][]int32
+	Labels       map[int]string
+	Cohesion     []float64
+	Gods         []analyze.GodNode
+	Surprises    []analyze.Surprise
+	Questions    []string
+	Detection    *detect.Result
+	FilesExtract int
+	FilesCached  int
+	FilesFailed  int
+	InputTokens  int
+	OutputTokens int
+	Elapsed      time.Duration
+	DetectTime   time.Duration
+	ExtractTime  time.Duration
+	ClusterTime  time.Duration
+	WriteTime    time.Duration
+	Outputs      []string
+	Neo4jSent    int
+	Warnings     []string
 }
 
 type fileJob struct {

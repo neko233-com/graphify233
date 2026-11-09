@@ -80,10 +80,10 @@ type graphmlKey struct {
 }
 
 type graphmlGraph struct {
-	ID           string          `xml:"id,attr"`
-	EdgeDefault  string          `xml:"edgedefault,attr"`
-	Nodes        []graphmlNode   `xml:"node"`
-	Edges        []graphmlEdge   `xml:"edge"`
+	ID          string        `xml:"id,attr"`
+	EdgeDefault string        `xml:"edgedefault,attr"`
+	Nodes       []graphmlNode `xml:"node"`
+	Edges       []graphmlEdge `xml:"edge"`
 }
 
 type graphmlNode struct {
@@ -236,11 +236,11 @@ type canvasNode struct {
 }
 
 type canvasEdge struct {
-	ID         string `json:"id"`
-	FromNode   string `json:"fromNode"`
-	ToNode     string `json:"toNode"`
-	Label      string `json:"label,omitempty"`
-	Color      string `json:"color,omitempty"`
+	ID       string `json:"id"`
+	FromNode string `json:"fromNode"`
+	ToNode   string `json:"toNode"`
+	Label    string `json:"label,omitempty"`
+	Color    string `json:"color,omitempty"`
 }
 
 // WriteCanvas writes an Obsidian JSON Canvas file.
@@ -363,4 +363,3 @@ func CommunityStats(g *model.Graph) (int, []int) {
 	sort.Ints(ids)
 	return len(ids), ids
 }
-

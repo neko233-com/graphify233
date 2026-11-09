@@ -63,13 +63,13 @@ type Node struct {
 
 // Edge is a directed relationship between two nodes.
 type Edge struct {
-	Source         string  `json:"source"`
-	Target         string  `json:"target"`
-	Relation       string  `json:"relation"`
-	Confidence     string  `json:"confidence"`
-	SourceFile     string  `json:"source_file"`
-	SourceLocation string  `json:"source_location"`
-	Weight         float64 `json:"weight"`
+	Source          string  `json:"source"`
+	Target          string  `json:"target"`
+	Relation        string  `json:"relation"`
+	Confidence      string  `json:"confidence"`
+	SourceFile      string  `json:"source_file"`
+	SourceLocation  string  `json:"source_location"`
+	Weight          float64 `json:"weight"`
 	ConfidenceScore float64 `json:"confidence_score"`
 }
 
@@ -86,9 +86,9 @@ type Hyperedge struct {
 
 // Extraction is the raw per-run extraction payload (cacheable, JSON friendly).
 type Extraction struct {
-	Nodes       []Node       `json:"nodes"`
-	Edges       []Edge       `json:"edges"`
-	Hyperedges  []Hyperedge  `json:"hyperedges,omitempty"`
+	Nodes        []Node      `json:"nodes"`
+	Edges        []Edge      `json:"edges"`
+	Hyperedges   []Hyperedge `json:"hyperedges,omitempty"`
 	InputTokens  int         `json:"input_tokens"`
 	OutputTokens int         `json:"output_tokens"`
 	Error        string      `json:"error,omitempty"`

@@ -13,11 +13,11 @@ import (
 )
 
 type nodeLink struct {
-	Directed   bool             `json:"directed"`
-	Multigraph bool             `json:"multigraph"`
-	Graph      map[string]any   `json:"graph"`
-	Nodes      []jsonNode       `json:"nodes"`
-	Links      []jsonLink       `json:"links"`
+	Directed   bool              `json:"directed"`
+	Multigraph bool              `json:"multigraph"`
+	Graph      map[string]any    `json:"graph"`
+	Nodes      []jsonNode        `json:"nodes"`
+	Links      []jsonLink        `json:"links"`
 	Hyperedges []model.Hyperedge `json:"hyperedges"`
 }
 

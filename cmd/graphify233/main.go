@@ -110,7 +110,7 @@ Usage:
   graphify233 add URL [dir]              fetch a page into graphify-out/memory
   graphify233 cache clear|info [dir]
   graphify233 hook install|uninstall|status [dir]
-  graphify233 install [claude|uninstall]  editor integration
+  graphify233 install [claude|vscode|all|uninstall] [dir]  editor integration
   graphify233 self-update [--check|--force]
   graphify233 version
 
@@ -490,17 +490,44 @@ func hookCmd(args []string) error {
 
 func installCmd(args []string) error {
 	action := "claude"
-	if len(args) > 0 {
-		action = args[0]
+	rest := args
+	if len(rest) > 0 {
+		action = rest[0]
+		rest = rest[1:]
+	}
+	root := "."
+	for _, a := range rest {
+		if !strings.HasPrefix(a, "-") {
+			root = a
+			break
+		}
 	}
 	switch action {
-	case "claude", "all":
-		_, err := install.Claude(os.Stdout)
+	case "claude":
+		if _, err := install.Claude(os.Stdout); err != nil {
+			return err
+		}
+		_, err := install.WriteGuidance(root, os.Stdout)
+		return err
+	case "vscode":
+		_, err := install.VSCodeTask(root, os.Stdout)
+		return err
+	case "all":
+		if _, err := install.Claude(os.Stdout); err != nil {
+			return err
+		}
+		if _, err := install.WriteGuidance(root, os.Stdout); err != nil {
+			return err
+		}
+		_, err := install.VSCodeTask(root, os.Stdout)
 		return err
 	case "uninstall", "remove":
-		return install.RemoveClaude(os.Stdout)
+		if err := install.RemoveClaude(os.Stdout); err != nil {
+			return err
+		}
+		return install.RemoveGuidance(root, os.Stdout)
 	default:
-		return fmt.Errorf("unknown install target %q (use claude|uninstall)", action)
+		return fmt.Errorf("unknown install target %q (use claude|vscode|all|uninstall)", action)
 	}
 }
 
