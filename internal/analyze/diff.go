@@ -26,18 +26,27 @@ type DiffEdge struct {
 	Confidence string `json:"confidence,omitempty"`
 }
 
+// CommunityMove records a node whose community assignment changed.
+type CommunityMove struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	From  int    `json:"from"`
+	To    int    `json:"to"`
+}
+
 // Diff describes how a graph changed between two snapshots.
 type Diff struct {
-	AddedNodes   []DiffNode `json:"added_nodes"`
-	RemovedNodes []DiffNode `json:"removed_nodes"`
-	AddedEdges   []DiffEdge `json:"added_edges"`
-	RemovedEdges []DiffEdge `json:"removed_edges"`
+	AddedNodes   []DiffNode      `json:"added_nodes"`
+	RemovedNodes []DiffNode      `json:"removed_nodes"`
+	AddedEdges   []DiffEdge      `json:"added_edges"`
+	RemovedEdges []DiffEdge      `json:"removed_edges"`
+	MovedNodes   []CommunityMove `json:"moved_nodes,omitempty"`
 }
 
 // Empty reports whether the two snapshots are structurally identical.
 func (d Diff) Empty() bool {
 	return len(d.AddedNodes) == 0 && len(d.RemovedNodes) == 0 &&
-		len(d.AddedEdges) == 0 && len(d.RemovedEdges) == 0
+		len(d.AddedEdges) == 0 && len(d.RemovedEdges) == 0 && len(d.MovedNodes) == 0
 }
 
 // Summary is a one-line description of the change.
@@ -45,8 +54,12 @@ func (d Diff) Summary() string {
 	if d.Empty() {
 		return "no structural changes"
 	}
-	return fmt.Sprintf("nodes +%d -%d · edges +%d -%d",
+	s := fmt.Sprintf("nodes +%d -%d · edges +%d -%d",
 		len(d.AddedNodes), len(d.RemovedNodes), len(d.AddedEdges), len(d.RemovedEdges))
+	if len(d.MovedNodes) > 0 {
+		s += fmt.Sprintf(" · communities moved %d", len(d.MovedNodes))
+	}
+	return s
 }
 
 // WriteJSON encodes the diff as indented JSON.
@@ -96,10 +109,19 @@ func GraphDiff(oldG, newG *model.Graph) Diff {
 		}
 	}
 	for _, n := range oldG.Nodes {
-		if _, ok := newNodes[n.ID]; !ok {
+		cur, ok := newNodes[n.ID]
+		if !ok {
 			d.RemovedNodes = append(d.RemovedNodes, nodeRef(n))
+			continue
+		}
+		// Community drift: the node survived but the clustering moved it.
+		if n.Community >= 0 && cur.Community >= 0 && n.Community != cur.Community {
+			d.MovedNodes = append(d.MovedNodes, CommunityMove{
+				ID: n.ID, Label: cur.Label, From: n.Community, To: cur.Community,
+			})
 		}
 	}
+	sort.Slice(d.MovedNodes, func(i, j int) bool { return d.MovedNodes[i].ID < d.MovedNodes[j].ID })
 
 	oldEdges := make(map[string]*model.Edge, len(oldG.Edges))
 	for _, e := range oldG.Edges {

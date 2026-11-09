@@ -93,22 +93,13 @@ func (d *docsIndex) find(rel string) (int32, bool) {
 	return -1, false
 }
 
-// Mentions adds "mentions" edges from documentation file nodes to uniquely named
-// code symbols found in their text. It returns the number of edges added.
-func Mentions(g *model.Graph, docs []Doc, lim Limits) int {
-	lim = lim.withDefaults()
-	if len(g.Nodes) == 0 || len(docs) == 0 {
-		return 0
-	}
-	// Unique code symbols by normalised label, and file node lookup by source.
+// symbolIndex maps normalised code labels to nodes. Labels that appear on more
+// than one node are dropped, because a mention would be ambiguous.
+func symbolIndex(g *model.Graph) map[string]int32 {
 	byLabel := make(map[string]int32, len(g.Nodes)/2)
 	ambiguous := make(map[string]bool, 8)
-	fileNode := newDocsIndex(len(docs))
 	for i := range g.Nodes {
 		n := g.Nodes[i]
-		if n.SourceFile != "" && strings.EqualFold(n.Label, baseName(n.SourceFile)) {
-			fileNode.add(n.SourceFile, int32(i))
-		}
 		if n.FileType != model.FileTypeCode || n.SourceFile == "" || model.IsFileExtLabel(n.Label) {
 			continue
 		}
@@ -125,6 +116,30 @@ func Mentions(g *model.Graph, docs []Doc, lim Limits) int {
 	for key := range ambiguous {
 		delete(byLabel, key)
 	}
+	return byLabel
+}
+
+// fileNodeIndex maps source paths and base names to file nodes.
+func fileNodeIndex(g *model.Graph) *docsIndex {
+	idx := newDocsIndex(len(g.Nodes))
+	for i := range g.Nodes {
+		n := g.Nodes[i]
+		if n.SourceFile != "" && strings.EqualFold(n.Label, baseName(n.SourceFile)) {
+			idx.add(n.SourceFile, int32(i))
+		}
+	}
+	return idx
+}
+
+// Mentions adds "mentions" edges from documentation file nodes to uniquely named
+// code symbols found in their text. It returns the number of edges added.
+func Mentions(g *model.Graph, docs []Doc, lim Limits) int {
+	lim = lim.withDefaults()
+	if len(g.Nodes) == 0 || len(docs) == 0 {
+		return 0
+	}
+	byLabel := symbolIndex(g)
+	fileNode := fileNodeIndex(g)
 	if len(byLabel) == 0 {
 		return 0
 	}

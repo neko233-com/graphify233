@@ -16,7 +16,7 @@ import (
 )
 
 // Version is bumped whenever extraction output changes, invalidating caches.
-const Version = 3
+const Version = 4
 
 // MakeID builds a stable, URL/file friendly node id from name parts.
 func MakeID(parts ...string) string {
@@ -185,8 +185,18 @@ func (b *Builder) Result() model.Extraction {
 // (forward slashes, relative to the invocation root).
 func File(path string, kind model.FileType) model.Extraction {
 	ext := strings.ToLower(filepath.Ext(path))
+	base := strings.ToLower(filepath.Base(path))
 	stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if base == "dockerfile" || strings.HasSuffix(base, ".dockerfile") {
+		return extractDockerfile(path, stem)
+	}
 	switch ext {
+	case ".sql":
+		return extractSQL(path, stem)
+	case ".tf", ".tfvars", ".hcl":
+		return extractTerraform(path, stem)
+	case ".json", ".yaml", ".yml":
+		return extractOpenAPI(path, stem)
 	case ".py":
 		return extractPython(path, stem)
 	case ".go":

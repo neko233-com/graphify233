@@ -23,6 +23,7 @@ import (
 	"github.com/neko233-com/graphify233/internal/detect"
 	"github.com/neko233-com/graphify233/internal/export"
 	"github.com/neko233-com/graphify233/internal/hooks"
+	"github.com/neko233-com/graphify233/internal/httpapi"
 	"github.com/neko233-com/graphify233/internal/install"
 	"github.com/neko233-com/graphify233/internal/mcp"
 	"github.com/neko233-com/graphify233/internal/model"
@@ -66,10 +67,14 @@ func run(args []string) error {
 		return explainCmd(rest)
 	case "mcp", "serve":
 		return mcpCmd(rest)
+	case "serve-http", "http":
+		return serveHTTPCmd(rest)
 	case "benchmark", "bench":
 		return benchCmd(rest)
 	case "diff":
 		return diffCmd(rest)
+	case "analyze", "health":
+		return analyzeCmd(rest)
 	case "hook":
 		return hookCmd(rest)
 	case "install":
@@ -105,10 +110,13 @@ Usage:
   graphify233 query "question" [--depth 3] [--budget 2000] [--json] [--graph path]
   graphify233 path FROM TO [--graph path]
   graphify233 explain NAME [--graph path]
-  graphify233 diff OLD.json NEW.json [--json]  compare two graph snapshots
+  graphify233 diff OLD.json NEW.json [--json] [--impact --depth 2]  compare snapshots
+  graphify233 analyze [dir] [--json]    cycles, unreferenced symbols, god nodes
   graphify233 mcp [--graph path]         MCP server over stdio
+  graphify233 serve-http [dir] [--addr 127.0.0.1:7331] [--token T]
+                                         HTTP JSON API + streamable MCP at /mcp
   graphify233 benchmark [graph.json]     token-reduction estimate
-  graphify233 watch [dir]                rebuild on file changes
+  graphify233 watch [dir] [--debounce 500ms]  rebuild on file changes
   graphify233 add URL [dir]              fetch a page into graphify-out/memory
   graphify233 cache clear|info [dir]
   graphify233 hook install|uninstall|status [dir]
@@ -248,6 +256,11 @@ func buildCmd(args []string, forceUpdate bool) error {
 	neo4jUser := fs.String("neo4j-user", "neo4j", "Neo4j user")
 	neo4jPass := fs.String("neo4j-pass", "", "Neo4j password")
 	quiet := fs.Bool("quiet", false, "suppress progress output")
+	semantic := fs.Bool("semantic", false, "add opt-in similarity edges (concepts, optional embeddings)")
+	semanticURL := fs.String("semantic-url", "", "OpenAI-compatible embeddings endpoint")
+	semanticModel := fs.String("semantic-model", "text-embedding-3-small", "embeddings model")
+	semanticKey := fs.String("semantic-key", os.Getenv("GRAPHIFY233_EMBED_KEY"), "embeddings API key")
+	semanticThreshold := fs.Float64("semantic-threshold", 0.82, "similarity threshold (0-1)")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -276,6 +289,8 @@ func buildCmd(args []string, forceUpdate bool) error {
 	opts := pipeline.Options{
 		Root: root, OutDir: *out, Mode: *mode, Update: *update, Workers: *workers,
 		Formats: formats, Logf: logf,
+		Semantic: *semantic, SemanticURL: *semanticURL, SemanticModel: *semanticModel,
+		SemanticKey: *semanticKey, SemanticThreshold: *semanticThreshold,
 	}
 	if *neo4jURL != "" {
 		opts.Neo4j = &export.Neo4jConfig{URL: *neo4jURL, User: *neo4jUser, Password: *neo4jPass}
@@ -301,6 +316,15 @@ func printSummary(res *pipeline.Result) {
 	fmt.Printf(")  ·  outputs: %s\n", strings.Join(res.Outputs, ", "))
 	if res.Mentions > 0 {
 		fmt.Printf("deep mode: %d documentation mentions linked to code\n", res.Mentions)
+	}
+	if res.Concepts > 0 || res.ConceptMentions > 0 {
+		fmt.Printf("deep mode: %d concept nodes · %d concept→symbol links\n", res.Concepts, res.ConceptMentions)
+	}
+	if res.Semantic > 0 {
+		fmt.Printf("semantic layer: %d similarity edges\n", res.Semantic)
+	}
+	for _, w := range res.Warnings {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
 	if res.DetectTime > 0 {
 		fmt.Printf("phase: detect %s · extract %s · cluster %s · write %s\n",
@@ -410,11 +434,13 @@ func queryCmd(args []string) error {
 func diffCmd(args []string) error {
 	fs := flag.NewFlagSet("diff", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable diff")
-	if err := fs.Parse(reorderFlags(args)); err != nil {
+	impact := fs.Bool("impact", false, "list reverse dependencies of changed nodes")
+	hops := fs.Int("depth", 2, "impact traversal depth")
+	if err := fs.Parse(reorderFlags(args, "--depth", "-depth")); err != nil {
 		return err
 	}
 	if fs.NArg() != 2 {
-		return errors.New("usage: graphify233 diff OLD.json NEW.json [--json]")
+		return errors.New("usage: graphify233 diff OLD.json NEW.json [--json] [--impact]")
 	}
 	oldG, err := export.LoadJSON(fs.Arg(0))
 	if err != nil {
@@ -425,7 +451,20 @@ func diffCmd(args []string) error {
 		return fmt.Errorf("new graph: %w", err)
 	}
 	d := analyze.GraphDiff(oldG, newG)
+
+	var impactResults []changeImpact
+	if *impact {
+		impactResults = diffImpact(oldG, newG, d, *hops)
+	}
 	if *asJSON {
+		if *impact {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(struct {
+				Diff   analyze.Diff   `json:"diff"`
+				Impact []changeImpact `json:"impact"`
+			}{d, impactResults})
+		}
 		if err := d.WriteJSON(os.Stdout); err != nil {
 			return err
 		}
@@ -437,6 +476,109 @@ func diffCmd(args []string) error {
 	printDiffNodes("-", d.RemovedNodes, 20)
 	printDiffEdges("+", d.AddedEdges, 20)
 	printDiffEdges("-", d.RemovedEdges, 20)
+	for _, mi := range d.MovedNodes {
+		fmt.Printf("  ~ community %s → %d (was %d)\n", mi.Label, mi.To, mi.From)
+	}
+	for _, r := range impactResults {
+		printImpact(r)
+	}
+	return nil
+}
+
+// changeImpact pairs one changed node with the dependents it affects.
+type changeImpact struct {
+	Change string               `json:"change"` // "added" or "removed"
+	Impact analyze.ImpactResult `json:"impact"`
+}
+
+func diffImpact(oldG, newG *model.Graph, d analyze.Diff, hops int) []changeImpact {
+	out := make([]changeImpact, 0, 8)
+	add := func(change string, g *model.Graph, name string) {
+		if len(out) >= 10 {
+			return
+		}
+		out = append(out, changeImpact{change, analyze.Impact(g, name, hops)})
+	}
+	for _, n := range d.AddedNodes {
+		add("added", newG, n.ID)
+	}
+	for _, n := range d.RemovedNodes {
+		add("removed", oldG, n.ID)
+	}
+	return out
+}
+
+func printImpact(r changeImpact) {
+	marker := "+"
+	if r.Change == "removed" {
+		marker = "-"
+	}
+	fmt.Printf("  %s impact of %s: %d dependents (depth ≤%d)\n",
+		marker, r.Impact.StartLabel, len(r.Impact.Dependents), r.Impact.Hops)
+	for i, h := range r.Impact.Dependents {
+		if i == 8 {
+			fmt.Printf("      … and %d more\n", len(r.Impact.Dependents)-8)
+			break
+		}
+		src := ""
+		if h.SourceFile != "" {
+			src = "  " + h.SourceFile
+		}
+		fmt.Printf("      - %s (d%d, %s)%s\n", h.Label, h.Depth, h.Relation, src)
+	}
+}
+
+func analyzeCmd(args []string) error {
+	root, args := splitDir(args)
+	fs := flag.NewFlagSet("analyze", flag.ContinueOnError)
+	gp := graphFlag(fs)
+	asJSON := fs.Bool("json", false, "machine-readable analysis")
+	top := fs.Int("top", 15, "maximum rows per section")
+	if err := fs.Parse(reorderFlags(args, "--graph", "-graph", "--top", "-top")); err != nil {
+		return err
+	}
+	g, err := loadGraph(graphPath(root, *gp))
+	if err != nil {
+		return err
+	}
+	cycles := analyze.Cycles(g)
+	dead := analyze.UnreferencedSymbols(g, *top)
+	gods := analyze.GodNodes(g, *top)
+	stats := query.New(g).Stats()
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(struct {
+			Stats        string                 `json:"stats"`
+			Cycles       [][]string             `json:"cycles"`
+			Unreferenced []analyze.Unreferenced `json:"unreferenced"`
+			GodNodes     []analyze.GodNode      `json:"god_nodes"`
+		}{stats, cycles, dead, gods})
+	}
+	fmt.Println("graph:", stats)
+	fmt.Printf("cycles: %d\n", len(cycles))
+	for i, c := range cycles {
+		if i == 5 {
+			fmt.Printf("  … and %d more\n", len(cycles)-5)
+			break
+		}
+		fmt.Printf("  - %s\n", strings.Join(c, " → "))
+	}
+	fmt.Printf("unreferenced symbols: %d\n", len(dead))
+	for i, u := range dead {
+		if i == *top {
+			fmt.Printf("  … and %d more\n", len(dead)-*top)
+			break
+		}
+		fmt.Printf("  - %-36s %s\n", u.Label, u.SourceFile)
+	}
+	fmt.Println("god nodes:")
+	for i, gd := range gods {
+		if i == *top {
+			break
+		}
+		fmt.Printf("  - %s (%d edges)\n", gd.Label, gd.Edges)
+	}
 	return nil
 }
 
@@ -516,6 +658,32 @@ func mcpCmd(args []string) error {
 		return err
 	}
 	return mcp.Serve(g, os.Stdin, os.Stdout)
+}
+
+func serveHTTPCmd(args []string) error {
+	root, args := splitDir(args)
+	fs := flag.NewFlagSet("serve-http", flag.ContinueOnError)
+	gp := graphFlag(fs)
+	addr := fs.String("addr", "127.0.0.1:7331", "listen address")
+	token := fs.String("token", os.Getenv("GRAPHIFY233_HTTP_TOKEN"), "bearer token (default $GRAPHIFY233_HTTP_TOKEN)")
+	if err := fs.Parse(reorderFlags(args, "--graph", "-graph", "--addr", "-addr", "--token", "-token")); err != nil {
+		return err
+	}
+	g, err := loadGraph(graphPath(root, *gp))
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           httpapi.Handler(g, *token),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+	fmt.Printf("graphify233 http on http://%s  (%d nodes · %d edges)\n", *addr, len(g.Nodes), len(g.Edges))
+	if *token == "" {
+		fmt.Println("warning: no token set; bind only to localhost or pass --token")
+	}
+	return srv.ListenAndServe()
 }
 
 func benchCmd(args []string) error {
@@ -759,6 +927,7 @@ func watchCmd(args []string) error {
 	root, rest := splitRoot(args, ".")
 	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 	interval := fs.Duration("interval", 2*time.Second, "poll interval")
+	debounce := fs.Duration("debounce", 500*time.Millisecond, "settle time after the last change")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -776,11 +945,22 @@ func watchCmd(args []string) error {
 	for {
 		time.Sleep(*interval)
 		fp := fingerprint(root)
-		if fp != last {
-			last = fp
-			fmt.Println("change detected")
-			runOnce()
+		if fp == last {
+			continue
 		}
+		// Wait until the tree settles so a burst of writes (git checkout,
+		// save-all) triggers one rebuild instead of many.
+		for i := 0; i < 10; i++ {
+			time.Sleep(*debounce)
+			next := fingerprint(root)
+			if next == fp {
+				break
+			}
+			fp = next
+		}
+		last = fp
+		fmt.Println("change detected")
+		runOnce()
 	}
 }
 

@@ -48,19 +48,13 @@ type tool struct {
 
 // Serve runs the JSON-RPC loop until EOF.
 func Serve(g *model.Graph, in io.Reader, out io.Writer) error {
-	eng := query.New(g)
 	r := bufio.NewReaderSize(in, 1<<20)
 	w := bufio.NewWriterSize(out, 1<<20)
 	defer w.Flush()
 	for {
 		line, err := r.ReadString('\n')
 		if len(strings.TrimSpace(line)) > 0 {
-			resp := handle(eng, []byte(line))
-			if resp != nil {
-				enc, merr := json.Marshal(resp)
-				if merr != nil {
-					return merr
-				}
+			if enc := HandleBytes(g, []byte(line)); enc != nil {
 				w.Write(enc)
 				w.WriteByte('\n')
 				if ferr := w.Flush(); ferr != nil {
@@ -75,6 +69,21 @@ func Serve(g *model.Graph, in io.Reader, out io.Writer) error {
 			return err
 		}
 	}
+}
+
+// HandleBytes processes one JSON-RPC message and returns its encoded response,
+// or nil when the message is a notification. It is the transport-neutral entry
+// point used by both the stdio loop and HTTP.
+func HandleBytes(g *model.Graph, raw []byte) []byte {
+	resp := handle(query.New(g), raw)
+	if resp == nil {
+		return nil
+	}
+	enc, err := json.Marshal(resp)
+	if err != nil {
+		return nil
+	}
+	return enc
 }
 
 func handle(eng *query.Engine, raw []byte) *response {

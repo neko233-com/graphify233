@@ -75,6 +75,9 @@ graphify233 build .              # build graphify-out/ for the current project
 graphify233 query "how does auth work"
 graphify233 path detect extract  # shortest path between two symbols
 graphify233 explain extract      # symbol detail and connections
+graphify233 diff old.json graph.json --impact
+graphify233 analyze              # cycles, unreferenced symbols, hubs
+graphify233 serve-http           # JSON API + remote MCP on 127.0.0.1:7331
 graphify233 benchmark            # token-savings report
 ```
 
@@ -101,9 +104,12 @@ graphify233 query "..." --json      machine-readable subgraph (nodes, edges, tok
 graphify233 explain NAME            symbol detail
 graphify233 path FROM TO            shortest path
 graphify233 diff OLD.json NEW.json  added/removed nodes and edges between snapshots
+graphify233 diff OLD NEW --impact   ... plus reverse dependencies of each change
+graphify233 analyze [dir]           cycles, unreferenced symbols, god nodes (--json)
 graphify233 benchmark [dir]         token reduction report
 graphify233 mcp [dir]               MCP server over stdio
-graphify233 watch [dir]             rebuild on file changes
+graphify233 serve-http [dir]        HTTP JSON API + streamable MCP at /mcp
+graphify233 watch [dir]             rebuild on file changes (--debounce 500ms)
 graphify233 add URL [dir]           ingest a web page into the graph
 graphify233 hook install|status|uninstall
 graphify233 install claude [dir]    Claude Code skill + slash command + project guidance
@@ -116,15 +122,26 @@ graphify233 verify-release          verify a checksums manifest
 
 Build flags: `--mode standard|deep`, `--update`, `--workers N`, `--out DIR`,
 `--wiki --svg --graphml --cypher --canvas`, `--no-json --no-report --no-html
---no-obsidian`, `--neo4j URL --neo4j-user --neo4j-pass`, `--quiet`.
+--no-obsidian`, `--neo4j URL --neo4j-user --neo4j-pass`, `--quiet`,
+`--semantic [--semantic-url URL --semantic-model NAME --semantic-key KEY
+--semantic-threshold 0.82]`.
 
 `--mode deep` never calls an LLM: extraction stays deterministic, and the flag
 widens the analysis (more god nodes and surprising connections) and links
 documentation to code. In deep mode every Markdown/text/PDF file is scanned for
 identifiers that match a uniquely named code symbol; each hit becomes an
 INFERRED `mentions` edge with a source line, so questions like "how does
-authentication work" can start from the docs. `graphify233 query` falls back to
-those mentions when no symbol name matches directly.
+authentication work" can start from the docs. Markdown headings also become
+document concept nodes and link to the symbols mentioned in their section
+(`concept→symbol mentions`). `graphify233 query` tries code symbols first, then
+document concepts, then falls back to mentions.
+
+Optional semantic layer: `--semantic` adds `semantically_similar_to` edges
+between concept sections with overlapping (IDF-weighted) symbol sets. Passing
+`--semantic-url` additionally embeds symbol labels through any
+OpenAI-compatible `/embeddings` endpoint and connects nearest neighbours above
+`--semantic-threshold`. Both layers are opt-in; the default build stays local
+and network-free.
 
 `graphify233 install claude` writes the Claude Code skill and slash command into
 `~/.claude/`, and adds a short `<!-- graphify233:start -->` section to the
@@ -135,7 +152,10 @@ removes it again. `install vscode` merges a build task into `.vscode/tasks.json`
 ## Languages
 
 Code: Python, Go, JavaScript/TypeScript, Rust, Java, C, C++, Ruby, C#,
-Kotlin, Scala, PHP. Documents: Markdown, plain text, reStructuredText. Papers:
+Kotlin, Scala, PHP. Config/infra: SQL DDL (tables, views, indexes, foreign
+keys), Terraform/HCL (resources, data, modules, variables, outputs), Dockerfile
+(build stages and `COPY --from`), OpenAPI/Swagger JSON and YAML (API + one node
+per path/method). Documents: Markdown, plain text, reStructuredText. Papers:
 PDF (built-in heuristic text extraction). Images: png, jpg, webp, gif, svg
 (recorded as assets).
 
@@ -148,14 +168,28 @@ Extraction is deterministic and every edge records where it came from:
 Nodes carry `source_file` and `source_location`; edges carry `source_file`,
 `source_location`, `confidence` and `confidence_score`.
 
-## MCP
+## MCP and HTTP
 
 ```sh
-graphify233 mcp .        # add as a stdio MCP server in Claude Code / any client
+graphify233 mcp .                                   # stdio MCP server
+graphify233 serve-http --token s3cret               # 127.0.0.1:7331
+curl -H "Authorization: Bearer s3cret" "localhost:7331/query?q=clustering"
 ```
 
-Tools: `query_graph`, `get_node`, `get_neighbors`, `get_community`,
-`god_nodes`, `graph_stats`, `shortest_path`.
+MCP tools: `query_graph`, `get_node`, `get_neighbors`, `get_community`,
+`god_nodes`, `graph_stats`, `shortest_path`. The HTTP server exposes the same
+graph as JSON: `/stats`, `/god`, `/query` (GET or POST), `/node`, `/neighbors`,
+`/path`, and `/mcp` for streamable JSON-RPC. Every route except `/healthz`
+requires `Authorization: Bearer <token>` when a token is set; the token defaults
+to `$GRAPHIFY233_HTTP_TOKEN`.
+
+## Analysis and diff
+
+`graphify233 analyze` reports dependency cycles (Tarjan SCC over calls/uses/
+references/inheritance), unreferenced symbols (no incoming dependency edge,
+entry points excluded) and hubs. `graphify233 diff old.json new.json --impact`
+lists added/removed nodes and edges, nodes that moved between communities, and
+for each change the reverse dependency set ("what breaks if this changes").
 
 ## Performance
 
@@ -200,14 +234,17 @@ the whole pipeline still finishes in under half a second.
 ```sh
 go test ./...                 # golden-parity extraction tests + unit tests
 go vet ./...                  # static checks
-./release.ps1 -Version v0.2.2 # or ./release.sh v0.2.2
-./release.ps1 -Publish -Version v0.2.2   # gh release create
+./release.ps1 -Version v0.4.0 # or ./release.sh v0.4.0
+./release.ps1 -Publish -Version v0.4.0   # gh release create
 ```
 
 Tests cover extraction parity, clustering (including the multi-level modularity
-regression), analysis, exports (JSON round-trip, Cypher, GraphML, SVG, Canvas),
-query, MCP, hooks, installation, doc/code mentions, and the incremental
-pipeline (cache reuse, sensitive-file exclusion).
+regression), analysis (impact, cycles, unreferenced symbols, community drift),
+exports (JSON round-trip, Cypher, GraphML, SVG, Canvas), query, MCP, the HTTP
+API, hooks, installation, doc/code mentions, concepts, the semantic layer
+(concept similarity and an `httptest` embeddings endpoint), new extractors
+(SQL/Terraform/Dockerfile/OpenAPI), and the incremental pipeline (cache reuse,
+sensitive-file exclusion).
 
 Extraction is verified against the Python reference's own output:
 `tools/gen_goldens.py` regenerates `internal/extract/testdata/expected_*.json`
@@ -216,7 +253,8 @@ relations and confidences for all 13 languages.
 
 Packages: `internal/lex` (tokenizer), `internal/extract` (per-language
 scanners), `internal/detect`, `internal/pdf`, `internal/graphbuild`,
-`internal/cluster`, `internal/analyze`, `internal/report`,
-`internal/export`, `internal/cache`, `internal/pipeline`, `internal/query`,
-`internal/benchmark`, `internal/mcp`, `internal/hooks`, `internal/install`,
+`internal/cluster`, `internal/analyze`, `internal/enrich` (mentions, concepts),
+`internal/semantic` (opt-in similarity), `internal/report`, `internal/export`,
+`internal/cache`, `internal/pipeline`, `internal/query`, `internal/benchmark`,
+`internal/mcp`, `internal/httpapi`, `internal/hooks`, `internal/install`,
 `internal/selfupdate`.

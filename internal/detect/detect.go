@@ -3,6 +3,7 @@ package detect
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -48,6 +49,8 @@ var codeExtensions = map[string]bool{
 	".cxx": true, ".c": true, ".h": true, ".hpp": true, ".rb": true,
 	".swift": true, ".kt": true, ".kts": true, ".cs": true, ".scala": true,
 	".php": true,
+	// Structured infrastructure formats with deterministic extractors.
+	".sql": true, ".tf": true, ".tfvars": true, ".hcl": true,
 }
 
 var docExtensions = map[string]bool{".md": true, ".txt": true, ".rst": true}
@@ -96,6 +99,10 @@ func isNoiseDir(name string) bool {
 
 // Classify returns the corpus category for a path, or "" when unsupported.
 func Classify(path string) Kind {
+	base := strings.ToLower(filepath.Base(path))
+	if base == "dockerfile" || strings.HasSuffix(base, ".dockerfile") {
+		return Code
+	}
 	ext := strings.ToLower(filepath.Ext(path))
 	switch {
 	case codeExtensions[ext]:
@@ -108,6 +115,39 @@ func Classify(path string) Kind {
 		return Image
 	}
 	return ""
+}
+
+// openAPICandidate reports whether a JSON/YAML file may describe an API. Those
+// extensions are only treated as code when a marker is found, so package.json
+// and CI config do not become graph files.
+func openAPICandidate(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".json", ".yaml", ".yml":
+		return true
+	}
+	return false
+}
+
+// sniffOpenAPI reads the head of a file looking for an OpenAPI/Swagger marker.
+func sniffOpenAPI(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 64<<10)
+	n, _ := io.ReadFull(f, buf)
+	head := strings.ToLower(string(buf[:n]))
+	if strings.Contains(head, "\"openapi\"") || strings.Contains(head, "\"swagger\"") {
+		return true
+	}
+	for _, line := range strings.Split(head, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "openapi:") || strings.HasPrefix(t, "swagger:") {
+			return true
+		}
+	}
+	return false
 }
 
 // Detect walks root and classifies every supported file.
@@ -138,6 +178,9 @@ func Detect(root string) (*Result, error) {
 			return
 		}
 		k := Classify(full)
+		if k == "" && openAPICandidate(full) && sniffOpenAPI(full) {
+			k = Code
+		}
 		if k == "" {
 			return
 		}

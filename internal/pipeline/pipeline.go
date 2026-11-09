@@ -3,6 +3,7 @@
 package pipeline
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"github.com/neko233-com/graphify233/internal/graphbuild"
 	"github.com/neko233-com/graphify233/internal/model"
 	"github.com/neko233-com/graphify233/internal/report"
+	"github.com/neko233-com/graphify233/internal/semantic"
 )
 
 // Formats selects which artifacts a run writes.
@@ -61,34 +63,45 @@ type Options struct {
 	Neo4j   *export.Neo4jConfig
 	Label   string // optional override for the report root label
 	Logf    func(format string, args ...any)
+
+	// Optional semantic layer. Concepts similarity is deterministic; the
+	// embeddings layer only runs when SemanticURL is set.
+	Semantic          bool
+	SemanticURL       string
+	SemanticModel     string
+	SemanticKey       string
+	SemanticThreshold float64
 }
 
 // Result carries everything a caller (CLI, MCP, watch) needs after a run.
 type Result struct {
-	Root         string
-	OutDir       string
-	Graph        *model.Graph
-	Communities  [][]int32
-	Labels       map[int]string
-	Cohesion     []float64
-	Gods         []analyze.GodNode
-	Surprises    []analyze.Surprise
-	Questions    []string
-	Detection    *detect.Result
-	FilesExtract int
-	FilesCached  int
-	FilesFailed  int
-	InputTokens  int
-	OutputTokens int
-	Elapsed      time.Duration
-	DetectTime   time.Duration
-	ExtractTime  time.Duration
-	ClusterTime  time.Duration
-	WriteTime    time.Duration
-	Outputs      []string
-	Neo4jSent    int
-	Mentions     int
-	Warnings     []string
+	Root            string
+	OutDir          string
+	Graph           *model.Graph
+	Communities     [][]int32
+	Labels          map[int]string
+	Cohesion        []float64
+	Gods            []analyze.GodNode
+	Surprises       []analyze.Surprise
+	Questions       []string
+	Detection       *detect.Result
+	FilesExtract    int
+	FilesCached     int
+	FilesFailed     int
+	InputTokens     int
+	OutputTokens    int
+	Elapsed         time.Duration
+	DetectTime      time.Duration
+	ExtractTime     time.Duration
+	ClusterTime     time.Duration
+	WriteTime       time.Duration
+	Outputs         []string
+	Neo4jSent       int
+	Mentions        int
+	Concepts        int
+	ConceptMentions int
+	Semantic        int
+	Warnings        []string
 }
 
 type fileJob struct {
@@ -209,6 +222,8 @@ func Run(opts Options) (*Result, error) {
 	// Deep mode links documentation to code by matching symbol names. It is
 	// deterministic and local: no LLM, no network.
 	mentions := 0
+	concepts := 0
+	conceptMentions := 0
 	if opts.Mode == "deep" {
 		var docs []enrich.Doc
 		for i := range jobs {
@@ -218,6 +233,23 @@ func Run(opts Options) (*Result, error) {
 			}
 		}
 		mentions = enrich.Mentions(g, docs, enrich.Limits{})
+		concepts, conceptMentions = enrich.Concepts(g, docs, enrich.Limits{})
+	}
+	semanticEdges := 0
+	var semanticWarn string
+	if opts.Semantic {
+		semanticEdges = semantic.Concepts(g, 0.5, semantic.Limits{})
+		if opts.SemanticURL != "" {
+			client := &semantic.EmbeddingClient{URL: opts.SemanticURL, Model: opts.SemanticModel, APIKey: opts.SemanticKey}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			n, err := semantic.EmbeddingLinks(ctx, g, client, opts.SemanticThreshold, semantic.Limits{})
+			cancel()
+			if err != nil {
+				semanticWarn = "semantic embeddings skipped: " + err.Error()
+			} else {
+				semanticEdges += n
+			}
+		}
 	}
 	g.BuildAdjacency()
 	logf("Graph: %d nodes, %d edges", len(g.Nodes), len(g.Edges))
@@ -248,6 +280,10 @@ func Run(opts Options) (*Result, error) {
 		FilesExtract: int(extracted), FilesCached: int(cached), FilesFailed: int(failed),
 		InputTokens: inputTokens, OutputTokens: 0,
 		DetectTime: detectDur, ExtractTime: extractDur, ClusterTime: clusterDur, Mentions: mentions,
+		Concepts: concepts, ConceptMentions: conceptMentions, Semantic: semanticEdges,
+	}
+	if semanticWarn != "" {
+		res.Warnings = append(res.Warnings, semanticWarn)
 	}
 
 	if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {

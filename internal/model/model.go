@@ -209,6 +209,12 @@ func (g *Graph) HasEdge(a, b string) bool {
 	return ok
 }
 
+// structuralRel marks edges that describe containment or imports rather than a
+// dependency between two symbols.
+var structuralRel = map[string]bool{
+	"contains": true, "method": true, "imports": true, "imports_from": true,
+}
+
 // AddEdge adds an edge if both endpoints exist, collapsing parallel pairs.
 func (g *Graph) AddEdge(e Edge) bool {
 	g.EnsureIndex()
@@ -234,7 +240,16 @@ func (g *Graph) AddEdge(e Edge) bool {
 		key = edgeKey{t, s}
 	}
 	if idx, ok := g.edgeIdx[key]; ok {
-		// Later extraction wins, mirroring networkx attribute updates.
+		// Later extraction wins, mirroring networkx attribute updates, except
+		// that structural edges never overwrite a real dependency edge (a file
+		// "contains" a symbol must not erase an observed "calls" edge).
+		if structuralRel[g.Edges[idx].Relation] && !structuralRel[e.Relation] {
+			g.Edges[idx] = &e
+			return true
+		}
+		if !structuralRel[g.Edges[idx].Relation] && structuralRel[e.Relation] {
+			return true
+		}
 		g.Edges[idx] = &e
 		return true
 	}
